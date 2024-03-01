@@ -148,14 +148,7 @@ def detect(frame_id):
                                   box_height=height)
             detection.save()
         
-        video_name, _ = os.path.splitext(os.path.basename(frame.video.path))
-        
-        detections_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 
-                                              'detections', 
-                                              video_name)
-
-        with open(os.path.join(detections_output_path, frame_name), 'wb') as f:
-            f.write(image.content)
+        frame.frame_data = (image.content)
     
     frame.status = 'COMPLETED'
     frame.save()
