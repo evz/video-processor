@@ -106,7 +106,10 @@ def extract_frames(video_id,
                           frame_number=frame,
                           status='ENQUEUED')
             frame.save()
+        
         detect.delay(frame.id)
+        
+        os.remove(frame_path)
 
 
 @celery_app.task
