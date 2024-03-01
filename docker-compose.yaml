@@ -51,23 +51,10 @@ services:
     deploy:
       replicas: 1
   
-  detector:
-    image: megadetector:latest
-    expose:
-      - '1213'
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-  
   detect:
     image: animals:latest
     depends_on:
       - db
-      - detector
     volumes:
       - .:/code
       - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
@@ -88,9 +75,16 @@ services:
       DJANGO_SUPERUSER_EMAIL: test@test.com
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      LOAD_MODEL: 'yes'
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
     deploy:
-      replicas: 1
+      replicas: 2
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
   
   db:
     image: 'postgres:15'
@@ -103,17 +97,6 @@ services:
       - postgresql_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-
-  nginx:
-    image: nginx:latest
-    volumes:
-      - ./conf/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - detector
-    ports:
-      - "4000:4000"
-    expose:
-    - '4000'
 
 volumes:
   postgresql:

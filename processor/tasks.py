@@ -4,9 +4,12 @@ import subprocess
 import logging
 import math
 import json
+from io import BytesIO
 
 import requests
 from requests_toolbelt.multipart.decoder import MultipartDecoder
+from PIL import Image
+from detection.run_detector import load_detector
 
 from django.conf import settings
 from video_processor import celery_app
@@ -114,44 +117,48 @@ def extract_frames(video_id,
 
 @celery_app.task
 def detect(frame_id):
-    
+    detector = load_detector('MDV5A')
+
     frame = Frame.objects.get(id=frame_id)
     frame.status = 'PROCESSING'
     frame.save()
     
-    frame_name = f'frame{frame.frame_number:07d}.jpg'
+    try:
+        image = Image.open(BytesIO(frame.frame_data))
+        if image.mode in ["RGBA", "L"]:
+            image = image.convert(mode="RGB")
 
-    image = [
-        ('images', (frame_name, frame.frame_data, 'image/jpeg'))
-    ]
+        image.load()
+    except Exception as e:
+        logger.error(f"Image {frame.video.name} - {frame.frame_number} cannot be processed: {e}")
+        frame.status = 'FAILED'
+        frame.save()
+        return
     
-    detector_url = f'http://nginx:4000/v1/camera-trap/sync/detect'
-    
-    params = {
-        'min_confidence': '0.65',
-        'render': 'true',
-    }
-
-    response = requests.post(detector_url, files=image, params=params)
-    
-    content, image = MultipartDecoder.from_response(response).parts
-    response_content = json.loads(content.content)
-    
-    if response_content[frame_name]:
-        for detection in response_content[frame_name]:
-            
-            x_coord, y_coord, width, height, confidence, category = detection
-
-            detection = Detection(frame=frame,
-                                  category=category,
-                                  confidence=confidence,
-                                  x_coord=x_coord,
-                                  y_coord=y_coord,
-                                  box_width=width,
-                                  box_height=height)
-            detection.save()
+    try:
+        result = detector.generate_detections_one_image(
+            image,
+            f'frame{frame.frame_number:07d}.jpg',
+            detection_threshold=0.65
+        )
+    except Exception as e:
+        logger.error(f"Image {frame.video.name} - {frame.frame_number} cannot be processed: {e}")
+        frame.status = 'FAILED'
+        frame.save()
+        return
+       
+    for detection in result['detections']:
         
-        frame.frame_data = (image.content)
+        x_coord, y_coord, width, height = detection['bbox']
+
+        detection = Detection(frame=frame,
+                              category=detection['category'],
+                              confidence=detection['conf'],
+                              x_coord=x_coord,
+                              y_coord=y_coord,
+                              box_width=width,
+                              box_height=height)
+        detection.save()
     
     frame.status = 'COMPLETED'
     frame.save()
