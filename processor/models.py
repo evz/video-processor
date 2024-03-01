@@ -27,9 +27,9 @@ class Video(models.Model):
 
 class Frame(models.Model):
     video = models.ForeignKey(Video, on_delete=models.CASCADE)
-    frame_path = models.CharField(max_length=1000)
+    frame_data = models.BinaryField(null=True)
     frame_number = models.IntegerField()
-    status = models.CharField(max_length=10, choices=STATI)
+    status = models.CharField(max_length=10, choices=STATI, db_index=True)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 

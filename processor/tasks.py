@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import logging
 import math
@@ -24,22 +25,22 @@ def add(x, y):
 def analyze_video(video_path):
     video_info = subprocess.run(
         [
-            'ffprobe',
-            '-v',
-            'error',
-            '-select_streams',
-            'v:0',
-            '-count_frames',
-            '-show_entries',
-            'stream=nb_read_frames',
-            '-print_format',
-            'csv',
-            video_path
+            'ffmpeg',
+            '-i',
+            video_path,
+            '-map',
+            '0:v:0',
+            '-c',
+            'copy',
+            '-f',
+            'null',
+            '-',
         ],
         capture_output=True
     )
     
-    frame_count = int(video_info.stdout.decode('utf-8').strip().split(',')[-1])
+    frame_count = int(re.findall(r'frame=\s+(\d+)', video_info.stderr.decode('utf-8'))[-1])
+
     video_name = os.path.basename(video_path)
     
     worker_count = settings.EXTRACT_WORKER_COUNT
@@ -62,7 +63,6 @@ def analyze_video(video_path):
                              worker * chunk_size, 
                              chunk_size, 
                              frame_count)
-
 
 
 @celery_app.task
@@ -100,11 +100,12 @@ def extract_frames(video_id,
 
     for frame in range(start_frame, (start_frame + number_of_frames_to_extract)):
         frame_path = f'{output_path}/frame{frame:07d}.jpg'
-        frame = Frame(video=video,
-                      frame_path=frame_path,
-                      frame_number=frame,
-                      status='ENQUEUED')
-        frame.save()
+        with open(frame_path, 'rb') as f:
+            frame = Frame(video=video,
+                          frame_data=f.read(),
+                          frame_number=frame,
+                          status='ENQUEUED')
+            frame.save()
         detect.delay(frame.id)
 
 
@@ -115,12 +116,11 @@ def detect(frame_id):
     frame.status = 'PROCESSING'
     frame.save()
     
-    frame_name = os.path.basename(frame.frame_path)
+    frame_name = f'frame{frame.frame_number:07d}.jpg'
 
-    with open(frame.frame_path, 'rb') as f:
-        image = [
-            ('images', (frame_name, f.read(), 'image/jpeg'))
-        ]
+    image = [
+        ('images', (frame_name, frame.frame_data, 'image/jpeg'))
+    ]
     
     detector_url = f'http://nginx:4000/v1/camera-trap/sync/detect'
     
@@ -154,8 +154,7 @@ def detect(frame_id):
                                               'detections', 
                                               video_name)
 
-        frame_filename = os.path.basename(frame.frame_path)
-        with open(os.path.join(detections_output_path, frame_filename), 'wb') as f:
+        with open(os.path.join(detections_output_path, frame_name), 'wb') as f:
             f.write(image.content)
     
     frame.status = 'COMPLETED'
