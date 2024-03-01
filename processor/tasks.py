@@ -9,7 +9,6 @@ from io import BytesIO
 import requests
 from requests_toolbelt.multipart.decoder import MultipartDecoder
 from PIL import Image
-from detection.run_detector import load_detector
 
 from django.conf import settings
 from video_processor import celery_app
@@ -114,10 +113,16 @@ def extract_frames(video_id,
         
         os.remove(frame_path)
 
+detector = None
 
 @celery_app.task
 def detect(frame_id):
-    detector = load_detector('MDV5A')
+
+    global detector 
+    
+    if not detector:
+        from detection.run_detector import load_detector
+        detector = load_detector('MDV5A')
 
     frame = Frame.objects.get(id=frame_id)
     frame.status = 'PROCESSING'
