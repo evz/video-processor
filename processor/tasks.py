@@ -5,12 +5,14 @@ import logging
 import math
 import json
 from io import BytesIO
+from pathlib import Path
 
 import requests
 from requests_toolbelt.multipart.decoder import MultipartDecoder
 from PIL import Image
 
 from django.conf import settings
+from django.core.files import File
 from video_processor import celery_app
 
 from .models import Video, Frame, Detection
@@ -41,20 +43,25 @@ def analyze_video(video_path):
         capture_output=True
     )
     
-    frame_count = int(re.findall(r'frame=\s+(\d+)', video_info.stderr.decode('utf-8'))[-1])
-
+    output_str = video_info.stderr.decode('utf-8')
+    matches = re.findall(r'frame=[\s+]*(\d+)', output_str)
+    frame_count = int(matches[-1])
+    
     video_name = os.path.basename(video_path)
     
     worker_count = settings.EXTRACT_WORKER_COUNT
     chunk_size = math.ceil(frame_count / worker_count)
     
-    video = Video(name=video_name,
-                  path=video_path,
-                  frame_count=frame_count,
-                  status='ENQUEUED')
-    video.save()
+    video_path = Path(video_path)
     
-    video_name, _ = os.path.splitext(os.path.basename(video.path))
+    with video_path.open(mode='rb') as f:
+        video = Video(name=video_name,
+                      video_file=File(f, name=video_path.name),
+                      frame_count=frame_count,
+                      status='ENQUEUED')
+        video.save()
+    
+    video_name, _ = os.path.splitext(video.name)
     frame_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', video_name)
     detections_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'detections', video_name)
     os.makedirs(frame_output_path, exist_ok=True)
@@ -80,14 +87,19 @@ def extract_frames(video_id,
     if start_frame + number_of_frames_to_extract > total_frames:
         number_of_frames_to_extract = total_frames - (start_frame - 1)
     
-    video_name, _ = os.path.splitext(os.path.basename(video.path))
+    video_name, _ = os.path.splitext(video.name)
     output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', video_name)
+    video_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', video.name)
+    
+    with open(video_output_path, 'wb') as f:
+        f.write(video.video_file.read())
+        video.video_file.close()
 
     subprocess.run(
         [
             'ffmpeg',
             '-i',
-            video.path,
+            video_output_path,
             '-start_number',
             str(start_frame),
             '-frames:v',
@@ -101,10 +113,10 @@ def extract_frames(video_id,
     frames = []
 
     for frame in range(start_frame, (start_frame + number_of_frames_to_extract)):
-        frame_path = f'{output_path}/frame{frame:07d}.jpg'
-        with open(frame_path, 'rb') as f:
+        frame_path = Path(f'{output_path}/frame{frame:07d}.jpg')
+        with frame_path.open(mode='rb') as f:
             frame = Frame(video=video,
-                          frame_data=f.read(),
+                          frame_file=File(f, name=frame_path.name),
                           frame_number=frame,
                           status='ENQUEUED')
             frame.save()
@@ -129,7 +141,7 @@ def detect(frame_id):
     frame.save()
     
     try:
-        image = Image.open(BytesIO(frame.frame_data))
+        image = Image.open(BytesIO(frame.frame_file.read()))
         if image.mode in ["RGBA", "L"]:
             image = image.convert(mode="RGB")
 
@@ -139,6 +151,8 @@ def detect(frame_id):
         frame.status = 'FAILED'
         frame.save()
         return
+    finally:
+        frame.frame_file.close()
     
     try:
         result = detector.generate_detections_one_image(

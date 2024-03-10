@@ -78,7 +78,7 @@ services:
       LOAD_MODEL: 'yes'
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
     deploy:
-      replicas: 2
+      replicas: 1
       resources:
         reservations:
           devices:

@@ -120,6 +120,24 @@ EXTRACT_WORKER_COUNT = int(os.getenv('EXTRACT_WORKER_COUNT', 2))
 FRAMES_OUTPUT_PATH = os.getenv('FRAMES_OUTPUT_PATH', '/output')
 DETECTOR_API_HOST = os.getenv('DETECTOR_API_HOST', 'localhost')
 
+STORAGES = {
+    "frames": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": "evz-frames-bucket"
+        },
+    },
+    "videos": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": "evz-videos-bucket"
+        },
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
 # CELERY settings
 
 CELERY_BROKER_URL = "sqs://"

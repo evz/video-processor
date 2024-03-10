@@ -6,3 +6,4 @@ python-ffmpeg==2.0.10
 requests==2.31.0
 requests-toolbelt==1.0.0
 megadetector==5.0.4
+django-storages[s3]==1.14.2
