@@ -3,21 +3,19 @@ services:
   
   analyze:
     image: animals:latest
-    depends_on:
-      - db
     volumes:
       - .:/code
       - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
       - ./input:/input
     environment:
-      EXTRACT_WORKER_COUNT: 1
+      EXTRACT_WORKER_COUNT: 4
       FRAMES_OUTPUT_PATH: '/output'
       DJANGO_SECRET_KEY: foobar
-      DB_HOST: db
+      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
       DB_PORT: 5432
       DB_NAME: processor
       DB_USER: processor
-      DB_PASSWORD: processor-password
+      DB_PASSWORD: 'HTX5>}{8Qzv27k0if|EW{ZW0lLBD'
       DJANGO_SUPERUSER_USERNAME: evz
       DJANGO_SUPERUSER_PASSWORD: letmeinnow
       DJANGO_SUPERUSER_EMAIL: test@test.com
@@ -27,17 +25,14 @@ services:
   
   extract:
     image: animals:latest
-    depends_on:
-      - db
     volumes:
       - .:/code
       - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
-      - ./input:/input
     environment:
-      EXTRACT_WORKER_COUNT: 1
+      EXTRACT_WORKER_COUNT: 4
       FRAMES_OUTPUT_PATH: '/output'
       DJANGO_SECRET_KEY: foobar
-      DB_HOST: db
+      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
       DB_PORT: 5432
       DB_NAME: processor
       DB_USER: processor
@@ -49,23 +44,19 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1']
     deploy:
-      replicas: 1
+      replicas: 2
   
   detect:
     image: animals:latest
-    depends_on:
-      - db
     volumes:
       - .:/code
       - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
-      - ./input:/input
-      - ./models:/models
     environment:
       EXTRACT_WORKER_COUNT: 1
       DETECTOR_API_HOST: detector
       FRAMES_OUTPUT_PATH: '/output'
       DJANGO_SECRET_KEY: foobar
-      DB_HOST: db
+      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
       DB_PORT: 5432
       DB_NAME: processor
       DB_USER: processor
@@ -85,19 +76,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-  
-  db:
-    image: 'postgres:15'
-    environment:
-      POSTGRES_PASSWORD: processor-password
-      POSTGRES_USER: processor
-      POSTGRES_DB: processor
-    volumes:
-      - postgresql:/var/lib/postgresql
-      - postgresql_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-volumes:
-  postgresql:
-  postgresql_data:

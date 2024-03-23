@@ -91,8 +91,6 @@ def extract_frames(video_id,
     output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', video_name)
     video_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', video.name)
     
-    os.makedirs(output_path, exist_ok=True)
-
     with open(video_output_path, 'wb') as f:
         f.write(video.video_file.read())
         video.video_file.close()
@@ -114,7 +112,6 @@ def extract_frames(video_id,
     
     frames = []
     
-    os.remove(video_output_path)
 
     for frame in range(start_frame, (start_frame + number_of_frames_to_extract)):
         frame_path = Path(f'{output_path}/frame{frame:07d}.jpg')
@@ -128,7 +125,7 @@ def extract_frames(video_id,
         detect.delay(frame.id)
         
         os.remove(frame_path)
-
+    
 detector = None
 
 @celery_app.task
@@ -191,3 +188,10 @@ def detect(frame_id):
     if completed_count == frame.video.frame_count:
         frame.video.status = 'COMPLETED'
         frame.video.save()
+        
+        video_output_path = os.path.join(settings.FRAMES_OUTPUT_PATH, 'frames', frame.video.name)
+
+        try:
+            os.remove(video_output_path)
+        except OSError:
+            pass
