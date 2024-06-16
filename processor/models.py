@@ -18,19 +18,19 @@ DETECTION_CATEGORIES = {
 
 
 class Video(models.Model):
-    name = models.CharField(max_length=1000)
-    video_file = models.FileField(storage=storages['videos'], null=True)
-    frame_count = models.IntegerField()
-    status = models.CharField(max_length=10, choices=STATI)
+    name = models.CharField(max_length=1000, null=True)
+    video_file = models.FileField(storage=storages['videos'])
+    frame_count = models.IntegerField(null=True)
+    status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
     
     def __str__(self):
-        return self.name
+        return f'Video {self.id}'
 
 
 def frame_upload_path(instance, filename):
-    video_name = os.path.splitext(instance.video.name)[0]
+    video_name = os.path.splitext(instance.video.video_file.name)[0]
     return f'{video_name}/frame{instance.frame_number:07d}.jpg'
 
 

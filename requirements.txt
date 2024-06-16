@@ -1,5 +1,5 @@
 Django==5.0.2
-celery[sqs]==5.3.6
+celery[redis]==5.3.6
 psycopg2==2.9.9
 django-celery-results==2.5.1
 python-ffmpeg==2.0.10

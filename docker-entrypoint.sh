@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-python manage.py migrate --noinput
+python3 manage.py migrate --noinput
 
 # Try to make a superuser and just skip it on failure
-python manage.py createsuperuser --noinput || true
+python3 manage.py createsuperuser --noinput || true
 
 exec "$@"

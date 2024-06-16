@@ -1,73 +1,55 @@
-version: '3'
 services:
+  admin:
+    image: video-processor:latest
+    depends_on: 
+      - db
+      - redis
+    volumes:
+      - .:/code
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      STORAGE_DIR: '/output'
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      REDIS_HOST: ${REDIS_HOST}
+    command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
+    ports:
+      - "8000:8000"
   
   analyze:
-    image: animals:latest
+    image: video-processor:latest
+    depends_on: 
+      - db
+      - redis
     volumes:
       - .:/code
-      - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
-      - ./input:/input
+      - ${STORAGE_MOUNT}:/output
     environment:
-      EXTRACT_WORKER_COUNT: 4
-      FRAMES_OUTPUT_PATH: '/output'
-      DJANGO_SECRET_KEY: foobar
-      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
-      DB_PORT: 5432
-      DB_NAME: processor
-      DB_USER: processor
-      DB_PASSWORD: 'HTX5>}{8Qzv27k0if|EW{ZW0lLBD'
-      DJANGO_SUPERUSER_USERNAME: evz
-      DJANGO_SUPERUSER_PASSWORD: letmeinnow
-      DJANGO_SUPERUSER_EMAIL: test@test.com
+      STORAGE_DIR: '/output'
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      REDIS_HOST: ${REDIS_HOST}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'analyze', '--concurrency', '1']
-  
-  extract:
-    image: animals:latest
-    volumes:
-      - .:/code
-      - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
-    environment:
-      EXTRACT_WORKER_COUNT: 4
-      FRAMES_OUTPUT_PATH: '/output'
-      DJANGO_SECRET_KEY: foobar
-      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
-      DB_PORT: 5432
-      DB_NAME: processor
-      DB_USER: processor
-      DB_PASSWORD: processor-password
-      DJANGO_SUPERUSER_USERNAME: evz
-      DJANGO_SUPERUSER_PASSWORD: letmeinnow
-      DJANGO_SUPERUSER_EMAIL: test@test.com
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1']
-    deploy:
-      replicas: 2
-  
-  detect:
-    image: animals:latest
-    volumes:
-      - .:/code
-      - /mnt/d379e10e-9348-43b8-b3b0-e6ea12f8e892:/output
-    environment:
-      EXTRACT_WORKER_COUNT: 1
-      DETECTOR_API_HOST: detector
-      FRAMES_OUTPUT_PATH: '/output'
-      DJANGO_SECRET_KEY: foobar
-      DB_HOST: ec2-3-145-168-225.us-east-2.compute.amazonaws.com
-      DB_PORT: 5432
-      DB_NAME: processor
-      DB_USER: processor
-      DB_PASSWORD: processor-password
-      DJANGO_SUPERUSER_USERNAME: evz
-      DJANGO_SUPERUSER_PASSWORD: letmeinnow
-      DJANGO_SUPERUSER_EMAIL: test@test.com
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      LOAD_MODEL: 'yes'
-    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
     deploy:
       replicas: 1
       resources:
@@ -76,3 +58,94 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+  
+  extract:
+    image: video-processor:latest
+    depends_on: 
+      - db
+      - redis
+    volumes:
+      - .:/code
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      STORAGE_DIR: '/output'
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      REDIS_HOST: ${REDIS_HOST}
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1']
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
+  detect:
+    image: video-processor:latest
+    depends_on: 
+      - db
+      - redis
+    volumes:
+      - .:/code
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      STORAGE_DIR: '/output'
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      REDIS_HOST: ${REDIS_HOST}
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
+    deploy:
+      replicas: 2
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
+#   If you just want to process things on a single machine, you can use these
+#   containers for your DB and Celery Broker, respectively. Just make sure you
+#   change your .env file to match.  
+    
+  db:
+    image: 'postgres:15'
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgresql:/var/lib/postgresql
+      - postgresql_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+  
+  redis:
+    image: 'redis:latest'
+    ports:
+      - '6379:6379'
+
+volumes:
+  postgresql:
+  postgresql_data:
