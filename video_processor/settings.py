@@ -102,8 +102,8 @@ if os.getenv('AWS_ACCESS_KEY_ID'):
     FRAMES_BUCKET = os.getenv('FRAMES_BUCKET')
     VIDEOS_BUCKET = os.getenv('VIDEOS_BUCKET')
     
-    if not FRAMES_BUCKET or VIDEOS_BUCKET:
-        raise ImproperlyConfigured('When configuring for AWS, you need to set FRAMES_BUCKET and VIDEOS_BUCKETi as env vars')
+    if not FRAMES_BUCKET or not VIDEOS_BUCKET:
+        raise ImproperlyConfigured('When configuring for AWS, you need to set FRAMES_BUCKET and VIDEOS_BUCKET as env vars')
     storages_config = { 
         "frames": {
             "BACKEND": "storages.backends.s3.S3Storage",
