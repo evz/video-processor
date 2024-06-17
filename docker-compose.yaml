@@ -21,43 +21,11 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
-      REDIS_HOST: ${REDIS_HOST}
+      FRAMES_BUCKET: ${FRAMES_BUCKET}
+      VIDEOS_BUCKET: ${VIDEOS_BUCKET}
     command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
     ports:
       - "8000:8000"
-  
-  analyze:
-    image: video-processor:latest
-    depends_on: 
-      - db
-      - redis
-    volumes:
-      - .:/code
-      - ${STORAGE_MOUNT}:/output
-    environment:
-      STORAGE_DIR: '/output'
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_REGION: ${AWS_REGION}
-      REDIS_HOST: ${REDIS_HOST}
-    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'analyze', '--concurrency', '1']
-    deploy:
-      replicas: 1
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
   
   extract:
     image: video-processor:latest
@@ -81,6 +49,8 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
+      FRAMES_BUCKET: ${FRAMES_BUCKET}
+      VIDEOS_BUCKET: ${VIDEOS_BUCKET}
       REDIS_HOST: ${REDIS_HOST}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1']
     deploy:
@@ -114,6 +84,8 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
+      FRAMES_BUCKET: ${FRAMES_BUCKET}
+      VIDEOS_BUCKET: ${VIDEOS_BUCKET}
       REDIS_HOST: ${REDIS_HOST}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
     deploy:
