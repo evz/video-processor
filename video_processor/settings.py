@@ -160,6 +160,9 @@ else:
     raise ImproperlyConfigured('Set either a REDIS_HOST or your AWS credentials for SQS as env vars')
 
 CELERY_TASK_ROUTES = {
+    'processor.tasks.analyze': {
+        'queue': 'analyze'
+    },
     'processor.tasks.extract_frames': {
         'queue': 'extract'
     },
@@ -168,3 +171,7 @@ CELERY_TASK_ROUTES = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
+
+# This is probably not the best way to do this but _hopefully_ we're not
+# letting random other processes set this env var
+WORKER_COUNT = int(eval(os.getenv('WORKER_COUNT', 1)))

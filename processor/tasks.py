@@ -7,6 +7,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 
+import numpy
 import requests
 from requests_toolbelt.multipart.decoder import MultipartDecoder
 from PIL import Image
@@ -23,15 +24,34 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task
-def extract_frames(video_id):
+def analyze(video_id):
+    video = Video.objects.get(id=video_id)
+    video_bytes = BytesIO(video.video_file.read())
+    video_reader = VideoReader(video_bytes, ctx=gpu(0))
+    
+    frame_count = len(video_reader)
+    worker_count = settings.WORKER_COUNT
+    
+    frame_list = numpy.array(list(range(1, frame_count)))
+    chunks = [[a[0], a[-1]] for a in numpy.array_split(frame_list, worker_count)]
+
+    for start_frame, end_frame in chunks:
+        extract_frames.delay(video.id, int(start_frame), int(end_frame))
+
+
+@celery_app.task
+def extract_frames(video_id,
+                   start_frame,
+                   end_frame):
     
     video = Video.objects.get(id=video_id)
 
     video_bytes = BytesIO(video.video_file.read())
     video_reader = VideoReader(video_bytes, ctx=gpu(0))
+    frame_batch = video_reader.get_batch(list(range(start_frame, end_frame + 1)))
 
-    for frame_number, frame in enumerate(video_reader):
-        _, encoded_frame = cv2.imencode('.jpg', frame.asnumpy(), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    for frame_number, frame in enumerate(frame_batch.asnumpy()):
+        _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
         image = BytesIO(encoded_frame)
 
         frame = Frame(video=video,

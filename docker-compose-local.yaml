@@ -1,0 +1,127 @@
+services:
+  admin:
+    image: ${DOCKER_IMAGE}
+    volumes:
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      REDIS_HOST: ${REDIS_HOST}
+      STORAGE_MOUNT: /output
+      WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
+    command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
+    ports:
+      - "8000:8000"
+  
+  analyze:
+    image: ${DOCKER_IMAGE}
+    volumes:
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      REDIS_HOST: ${REDIS_HOST}
+      STORAGE_MOUNT: /output
+      WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'analyze', '--concurrency', '1']
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
+  extract:
+    image: ${DOCKER_IMAGE}
+    volumes:
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      REDIS_HOST: ${REDIS_HOST}
+      STORAGE_MOUNT: /output
+      WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1']
+    deploy:
+      replicas: ${WORKERS_PER_HOST}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
+  detect:
+    image: ${DOCKER_IMAGE}
+    volumes:
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      REDIS_HOST: ${REDIS_HOST}
+      STORAGE_MOUNT: /output
+      WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1']
+    deploy:
+      replicas: 2
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
+#   If you just want to process things on a single machine, you can use these
+#   containers for your DB and Celery Broker, respectively. Just make sure you
+#   change your .env file to match.  
+    
+  db:
+    image: 'postgres:15'
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgresql:/var/lib/postgresql
+      - postgresql_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+  
+  redis:
+    image: 'redis:latest'
+    ports:
+      - '6379:6379'
+
+volumes:
+  postgresql:
+  postgresql_data:
