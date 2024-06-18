@@ -23,11 +23,11 @@ programs? Well, I put together a Dockerfile and docker-compose.yaml that one
 _could_ use to run this across several GPU equipped EC2 instances or something.
 Note that this probably requires a trust fund or some other means by which you
 can finance this without impacting your ability to pay rent. I processed
-exactly _one_ approximately 90 minute long video on a XXXXXXX instance and my
-laptop and it took XXXXXX. So, I guess you can use that information however you
-want to. I'll get into the nitty gritty of how to set this project up to run
-that way further down in the README but first let's talk about what it takes to
-run it in the first place.
+exactly _one_ approximately 90 minute long video on a `g5.xlarge` instance and
+my laptop and it took XXXXXX. So, I guess you can use that information however
+you want to. I'll get into the nitty gritty of how to set this project up to
+run that way further down in the README but first let's talk about what it
+takes to run it in the first place.
 
 ### Prerequisites
 
@@ -49,17 +49,19 @@ minutes has over 100,000 images in it (and that's at a pretty low frame rate).
 In my experience, this can consume around 180GB of disk space. 
 
 The other thing that ends up requiring a lot of disk space is the docker
-images. Besides space, the disk needs to be relatively fast. So, if you're
-thinking "I've got a big 'ol USB backup drive I can use for this", just be
-prepared to wait because having fast disk ends up making a real difference.
-Further down when I talk about how to distribute this across several systems,
-I'll talk about how to use something like AWS S3 for a storage backend. This is
-_fine_ I guess but, again, using a local, fast disk really makes it better.
+images. The image that the Dockerfile in this repo builds is over 10GB so when you're messing around with it and building different versions, it can add up.
+
+Besides space, the disk needs to be relatively fast. So, if you're thinking
+"I've got a big 'ol USB backup drive I can use for this", just be prepared to
+wait because having fast disk ends up making a real difference. Further down
+when I talk about how to distribute this across several systems, the setup
+seamlessly uses AWS S3 for a storage backend. This is _fine_ I guess but,
+again, using a local, fast disk really makes it better.
 
 To use the Docker setup, you'll also need to install the [Nvidia Container
 Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 FWIW, that's probably going to be the vastly simpler way of using this (and, to
-be honest, probably the better way, too, since it'll be easier to scale and run
+be honest, probably the better way, since it'll be easier to scale and run
 across several systems that way, too). You also won't need to worry about
 getting the CUDA Toolkit setup on your host since the container handles all of
 that for you and just leverages whatever GPU you have on your host. 
@@ -72,33 +74,120 @@ So, to summarize for the people who are just skimming, the prerequisites are:
 * A lot of disk space on a fast disk (optional but, like, definitely worth it)
 * For Docker: [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
-### How this project is stitched together
+### How do I make it go?
 
-The short version is that this project uses Django + Celery to run a coule
-different "chunks" of the processing pipeline in a more or less distributed
-way. Could it be more distributed? Probably. But I'm not really willing to give
-AWS that kind of money (yet). You'll see these stages reflected in the [celery
-tasks](processor/tasks.py) and in the names of the services in the
-[`docker-compose.yaml`](docker-compose.yaml) file. These stages look like this:
+The simplest way to run this is just on your local machine using the
+`docker-compose-local.yaml` file with the `.env.local` file to populate the env
+vars. To run it in a more distributed way, see the section on running it in a
+more distributed way below. To get a basic running version up, here's the
+tl;dr:
 
-**Extract frames from the video** As I'm sure you've guessed, this iterates
-through the video and saves out each frame as a separate image and makes a row
-for each frame in the DB. This is really where the storage backend you're using
-will come into play since, as I mentioned above, an approximately 90 minute
-video with a framerate of 20 fps will use up about 180GB of disk. If you're
-using S3, you'll need to consider the data transfer costs, too (unless
-you're doing _all_ your processing in AWS). Right now, this is just handled
-by a single worker since the `decord` library does a pretty amazing job of
-quickly extracting the frames far faster than the detection workers can run
-detections on them. If you're getting to the point where you have enough
-detection workers that this process can't keep up, open an issue and we can
-talk about how to parallelize this process.  
+* Build the docker image (see "Docker build process" below)
+* Make a copy of the example local env file and make changes as needed
+  (probably the only thing you'll want to think about changing is the
+  `STORAGE_MOUNT` but, it should just work as is)
+```
+cp .env.local.example .env.local
+```
+* Run the docker compose file using the copy of the env file you just made:
 
-**Detect whether or not there are interesting things in the images** This is
-the meat and potatoes of the process. It uses the MegaDetector v5a model to
-figure out if there are likely to be animals, people, or vehicles in each frame
-of the video and, if it finds things, it saves its findings to a DB table. What
-do its findings look like? Here's what the DB table looks like: 
+```
+docker compose -f docker-compose-local.yaml --env-file .env.local
+```
+
+That's basically it. You should get an `admin` container for free.  By default,
+it's configured to make a user for you if you set `DJANGO_SUPERUSER_USERNAME`,
+`DJANGO_SUPERUSER_PASSWORD` and `DJANGO_SUPERUSER_EMAIL` in your `.env.local`
+file. Then you should be able to login using those creds by navigating to
+`http://127.0.0.1:8000/admin` in your web browser. If you're familiar with the
+Django Admin, this should look familiar.  Once you're logged in, you can click
+through to `Video` and then `Add Video` in the upper right hand corner. From
+there, you should be prompted for a file to upload. Once the video is uploaded,
+it should start processing. 
+
+### Running in a more distributed way 
+
+The example I've included for running this in a distributed way is running some
+workers on an AWS EC2 instance with a GPU and some workers on a local machine.
+If you'd like to run this _entirely_ on AWS or another cloud provider, one
+thing you'll need to do is make the `admin` container slightly less dumb. Right
+now it's just using the Django development server and isn't behind a web
+server, isn't using SSL, etc, etc. I'd really, really recommend _not_ just
+running that as is anywhere but your local machine. I have done this kind of
+thing in the past so if you get stuck attempting to Google for it, open an
+issue and I'll give you some pointers.
+
+At any rate, the tl;dr to get this running on AWS is:
+
+* **Ask AWS to let you spin up GPU instances** If you don't already have
+  permission, this is something that you have to submit a support ticket to get
+  turned on. They seem to get back to you pretty quickly but, it's a step
+  nonetheless. If you're not familiar with how they do these things, you're
+  asking for the ability to run a certain number of vCPUs of a given instance
+  type. I was able to get 8 vCPUs "granted" to me for "G" type instances (which
+  are the cheapest GPU instances as of early 2024).
+* **Spin up your GPU instance and install things** I've included instructions
+  for getting things setup on an Ubuntu 22.04 machine above (see
+  "Prerequisites") and it should work in more or less the same way if
+  you're using Ubuntu 22.04 for your new instance. One nice thing that is
+  included with the "G" type instances is a 250GB instance store which I
+  started using for my docker setup so that I didn't have to pay for a
+  massive EBS volume. If you want to do something similar, you can format
+  and mount that device and then add a `/etc/docker/daemon.json` file that
+  tells your docker setup where to cache the images. I'll let you go ahead
+  and Google that so this tl;dr doesn't get too long.
+* **Build the docker image** You can either do this locally and push the image
+  to AWS's Container Registry (aka ECR; that's what I was doing) or just build
+  the image on your new instance. Either way, you can follow the Docker build
+  process below. Before you push to ECR, you'll need to get the login creds and
+  configure docker to use them. Here's a nifty one-liner for that:
+  ```
+  aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin <your-ecr-hostname>
+  ```
+* **Make a DB instance** You should be able to use the smallest instance type
+  available to run PostgreSQL or, if you're fancy (and really like giving AWS
+  money) you can use RDS or Aurora. You should be able to just spin up a Linux
+  instance of your choosing and install PostgreSQL on it. You'll want to edit
+  your `pg_hba.conf` file to allow your GPU instance(s) and your local machine
+  to connect to it. Also make sure it uses the same security group as the GPU
+  instance(s) you spun up. That'll make the next step easier.
+* **Setup your Security Group** You'll want to add a couple rules. One that
+  allows instances that are associated with that security group to connect to
+  one another on port 5432, and then one that allows your local machine to
+  connect to it on port 5432. I suppose you could make a couple security groups
+  and make that a little cleaner but, ya know, let's just get to the good part,
+  shall we?
+* **Copy the example .env file** Similar to running this thing locally, you'll need to make a copy of `.env.aws` and make changes to it as needed. At the very least you'll need to change:
+    - `AWS_ACCESS_KEY_ID`
+    - `AWS_SECRET_ACCESS_KEY`
+    - `AWS_REGION`
+    - `FRAMES_BUCKET`
+    - `VIDEOS_BUCKET`
+    - Probably most of the `DB_*` vars based on how you setup your DB instance
+    - `WORKERS_PER_HOST` This is the number of replicas you'd like to use to
+      extract frames from your video files. I suppose you could use it to
+      determine the number of replicas to use to detect things in the images as
+      well but I've found that anything more the 2 has diminishing returns.
+    - `HOST_COUNT` Set this to the number of machines you're running this on.
+* **Run it!** You should be able to run the AWS version of the docker compose
+  file along with the AWS version of the .env file on the GPU instance(s) as
+  well as your local machine like so:
+```
+docker compose -f docker-compose-aws.yaml --env-file .env.aws
+```
+* **Process a file** This is the same as on a local setup. Just navigate to
+  `http://127.0.0.1:8000/admin` on your local machine, login and then click
+  through the UI to upload a new Video. 
+
+That probably glosses over some details but if you're comfortable with AWS and
+OK at Googling, you should be able to get things going. If not, open an issue
+and I'll see if I can help you out.
+
+### OK, I've processed a video, now what?
+
+The main output of this is a DB table that records where in an image the
+detector found something and what kind of a thing it is. What does it look
+like? Here's what the DB table looks like: 
 
 ```
   id  | category | confidence |  x_coord  | y_coord | box_width | box_height | frame_id 
@@ -110,7 +199,6 @@ do its findings look like? Here's what the DB table looks like:
 
 ... etc ...
 ```
-
 The `category` is what kind of thing (1 = animal, 2 = person, 3 = vehicle) is
 represented by the detection. The `confidence` is how confident the model was
 that it is, in fact, the thing that it thinks it is. The coordinates represent
@@ -120,31 +208,6 @@ are ultimately something that can be used by PIL to actually go a draw a box on
 the image, if that's your thing. I'll be working on a piece of the pipeline
 here soon to actually take care of that and output a video but I haven't gotten
 there yet. 
-
-### How do I make it go?
-
-If you're using the Docker setup, you should get an `admin` container for free.
-By default, it's configured to make a user for you if you set
-`DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD` and
-`DJANGO_SUPERUSER_EMAIL` in your `.env` file. Then you should be able to login
-using those creds by navigating to `http://127.0.0.1:8000/admin` in your web
-browser. If you're familiar with the Django Admin, this should look familiar.
-Once you're logged in, you can click through to `Video` and then `Add Video` in
-the upper right hand corner. From there, you should be prompted for a file to
-upload. Once the video is uploaded, it should start processing. 
-
-One thing to note: If you're using more than one machine to process things,
-you'll need to use the S3 backend for storage by setting the `AWS` env vars
-shown in the example `.env` file. You'll also need to make sure that whatever
-creds you are using have the ability to add things to S3 and whatever machines
-are doing the processing have access to the bucket(s) you are using to store
-the frames and videos. 
-
-If you're running this thing _entirely_ on AWS which makes the admin container
-a little hard to access, open an issue and I can help you get it set up such
-that the admin is exposed in a way that you can access it. If you're familiar
-with how to deploy a Django app in production using docker compose, then you
-probably don't need my help.
 
 ### Docker build process
 This project relies upon [`decord`](https://github.com/dmlc/decord) to quickly
@@ -172,6 +235,35 @@ docker build -t video-processor:latest .
 
 The build will probably take around 5 minutes and use around 10GB of disk.
 
-### Running across several machines
+### How this project is stitched together
 
+The short version is that this project uses Django + Celery to run a couple
+different "chunks" of the processing pipeline in a more or less distributed
+way. Could it be more distributed? Probably. But I'm not really willing to give
+AWS that kind of money (yet). You'll see these stages reflected in the [celery
+tasks](processor/tasks.py) and in the names of the services in the
+`docker-compose` files. These stages look like this:
 
+**Analyze the video** Really all this does is takes the inputs you give for
+`WORKERS_PER_HOST` and `HOST_COUNT` and figures out how to distribute the work
+of extracting frames from the video across the workers that you have available.
+I suppose there could be some additional steps in there eventually but that's
+enough for now. 
+
+**Extract frames from the video** As I'm sure you've guessed, this iterates
+through the video and saves out each frame as a separate image and makes a row
+for each frame in the DB. This is really where the storage backend you're using
+will come into play since, as I mentioned above, an approximately 90 minute
+video with a framerate of 20 fps will use up about 180GB of disk. If you're
+using S3, you'll need to consider the data transfer costs, too (unless
+you're doing _all_ your processing in AWS). Right now, this is just handled
+by a single worker since the `decord` library does a pretty amazing job of
+quickly extracting the frames far faster than the detection workers can run
+detections on them. If you're getting to the point where you have enough
+detection workers that this process can't keep up, open an issue and we can
+talk about how to parallelize this process.  
+
+**Detect whether or not there are interesting things in the images** This is
+the meat and potatoes of the process. It uses the MegaDetector v5a model to
+figure out if there are likely to be animals, people, or vehicles in each frame
+of the video and, if it finds things, it saves its findings to a DB table. 
