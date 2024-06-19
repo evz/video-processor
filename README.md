@@ -306,3 +306,7 @@ but imperfect solution. Which doesn't quite feel right to me. Hopefully I'll
 get some more time to work on this before I run out of room to store all my
 security camera videos. All I want is to stare at cute little animals in my
 backyard!
+
+### A coyote walking through my backyard in the middle of the night
+
+![](coyote.gif)
