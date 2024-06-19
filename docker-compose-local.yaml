@@ -2,6 +2,7 @@ services:
   admin:
     image: ${DOCKER_IMAGE}
     volumes:
+      - .:/code
       - ${STORAGE_MOUNT}:/output
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
@@ -23,6 +24,7 @@ services:
   analyze:
     image: ${DOCKER_IMAGE}
     volumes:
+      - .:/code
       - ${STORAGE_MOUNT}:/output
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
@@ -50,6 +52,7 @@ services:
   extract:
     image: ${DOCKER_IMAGE}
     volumes:
+      - .:/code
       - ${STORAGE_MOUNT}:/output
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
@@ -77,6 +80,7 @@ services:
   detect:
     image: ${DOCKER_IMAGE}
     volumes:
+      - .:/code
       - ${STORAGE_MOUNT}:/output
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}

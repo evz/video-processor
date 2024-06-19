@@ -32,26 +32,38 @@ def analyze(video_id):
     frame_count = len(video_reader)
     worker_count = settings.WORKER_COUNT
     
+    # If you shove to many frames onto the GPU, it'll run out of memory. Let's
+    # limit it so we don't run into that.
+    if frame_count / worker_count > 5000:
+        worker_count = math.ceil(frame_count / 5000)
+
     frame_list = numpy.array(list(range(1, frame_count)))
     chunks = [[a[0], a[-1]] for a in numpy.array_split(frame_list, worker_count)]
 
     for start_frame, end_frame in chunks:
-        extract_frames.delay(video.id, int(start_frame), int(end_frame))
+        extract_frames.delay(video.id, 
+                             start_frame=int(start_frame), 
+                             end_frame=int(end_frame))
 
 
 @celery_app.task
 def extract_frames(video_id,
-                   start_frame,
-                   end_frame):
+                   start_frame=None,
+                   end_frame=None):
     
     video = Video.objects.get(id=video_id)
 
     video_bytes = BytesIO(video.video_file.read())
     video_reader = VideoReader(video_bytes, ctx=gpu(0))
-    frame_batch = video_reader.get_batch(list(range(start_frame, end_frame + 1)))
+    
+    # Commenting this for now since the batching seems to be quite a bit slower
+    # than just having one process enqueue all the detect tasks
+    
+    # frame_batch = video_reader.get_batch(list(range(start_frame, end_frame + 1)))
 
-    for frame_number, frame in enumerate(frame_batch.asnumpy()):
-        _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    # for frame_number, frame in enumerate(frame_batch.asnumpy()):
+    for frame_number, frame in enumerate(video_reader):
+        _, encoded_frame = cv2.imencode('.jpg', frame.asnumpy(), [cv2.IMWRITE_JPEG_QUALITY, 90])
         image = BytesIO(encoded_frame)
 
         frame = Frame(video=video,

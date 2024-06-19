@@ -267,3 +267,42 @@ talk about how to parallelize this process.
 the meat and potatoes of the process. It uses the MegaDetector v5a model to
 figure out if there are likely to be animals, people, or vehicles in each frame
 of the video and, if it finds things, it saves its findings to a DB table. 
+
+### Things I've run into which are slightly puzzling to me
+
+The one step in this process that has always vexed me is the part where the
+video gets broken apart into individual images for each frame. If you look back
+in the git history for this repo, you'll notice that I was using OpenCV to
+extract the frames at first. The problem I had with that was that, for my
+videos in particular, OpenCV would end up not extracting all of the frames in
+an individual file. This seems to have something to do with the video codec
+that is used to encode the files on my little security camera system doesn't
+have very good metadata so any open source tool just gets garbage in. 
+
+I did find that `ffmpeg` could extract all the frames if you gave it the
+correct incantations but it was always limited since you can only run it in one
+process. Even the hardware acceleration that you can get with the Nvidia
+Toolkit doesn't really help much (it seems to be more for encoding videos). I
+tried breaking the work of extracting frames up into smaller chunks and then
+just telling a bunch of workers to have `ffmpeg` only extract a particular
+chunk but the problem then became the fact that, as the processing got farther
+and farther into the video, `ffmpeg` would have to scan the video farther and
+farther which was just a non-starter for very large videos. 
+
+I then found `decord` which definitely does things a whole lot faster but has
+the same limitations as OpenCV (since under the hood it seems to be using quite
+a lot of the same primitives). Even though it's faster, it still seems like it
+cani't quite keep up with the rate with which the process that is trying to see
+if there are animals in the frames is working (especially if you're running
+this on more than one machine). I'm guessing this is probably partly
+because of the same thing I ran into with `ffmpeg`: scanning large videos
+takes time and partly because I don't have a machine with 20 GPUs dedicated
+to extracting images from videos so, even if I parallelize that process,
+it's still fighting for resources with the detection process. Especially
+with large videos, `decord` does seem to fail in weird ways when I
+parallelize the process of extracting frames (which seem related to running out
+of memory on the GPU?) So, that's where this project currently sits: a faster
+but imperfect solution. Which doesn't quite feel right to me. Hopefully I'll
+get some more time to work on this before I run out of room to store all my
+security camera videos. All I want is to stare at cute little animals in my
+backyard!
