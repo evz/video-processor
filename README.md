@@ -48,13 +48,14 @@ also make the files a little smaller. That said, a video of approximately 90
 minutes has over 100,000 images in it (and that's at a pretty low frame rate).
 In my experience, this can consume around 180GB of disk space. 
 
-The other thing that ends up requiring a lot of disk space is the docker
-images. The image that the Dockerfile in this repo builds is over 10GB so when you're messing around with it and building different versions, it can add up.
+The other thing that ends up requiring a lot of disk space are the docker
+images. The image that the Dockerfile in this repo builds is over 10GB so when
+you're messing around with it and building different versions, it can add up.
 
 Besides space, the disk needs to be relatively fast. So, if you're thinking
 "I've got a big 'ol USB backup drive I can use for this", just be prepared to
 wait because having fast disk ends up making a real difference. Further down
-when I talk about how to distribute this across several systems, the setup
+when I talk about how to distribute this across several systems and the setup
 seamlessly uses AWS S3 for a storage backend. This is _fine_ I guess but,
 again, using a local, fast disk really makes it better.
 
@@ -113,9 +114,10 @@ If you'd like to run this _entirely_ on AWS or another cloud provider, one
 thing you'll need to do is make the `admin` container slightly less dumb. Right
 now it's just using the Django development server and isn't behind a web
 server, isn't using SSL, etc, etc. I'd really, really recommend _not_ just
-running that as is anywhere but your local machine. I have done this kind of
-thing in the past so if you get stuck attempting to Google for it, open an
-issue and I'll give you some pointers.
+running that as is anywhere but your local machine. I've been deploying Django
+in production environments since 2009 and have done this in Docker a few times
+as well so if you get stuck attempting to Google for it, open an issue and I'll
+give you some pointers.
 
 At any rate, the tl;dr to get this running on AWS is:
 
@@ -157,18 +159,17 @@ At any rate, the tl;dr to get this running on AWS is:
   connect to it on port 5432. I suppose you could make a couple security groups
   and make that a little cleaner but, ya know, let's just get to the good part,
   shall we?
-* **Copy the example .env file** Similar to running this thing locally, you'll need to make a copy of `.env.aws` and make changes to it as needed. At the very least you'll need to change:
+* **Copy the example .env file** Similar to running this thing locally, you'll
+  need to make a copy of `.env.aws` and make changes to it as needed. At the
+  very least you'll need to change:
     - `AWS_ACCESS_KEY_ID`
     - `AWS_SECRET_ACCESS_KEY`
     - `AWS_REGION`
     - `FRAMES_BUCKET`
     - `VIDEOS_BUCKET`
     - Probably most of the `DB_*` vars based on how you setup your DB instance
-    - `WORKERS_PER_HOST` This is the number of replicas you'd like to use to
-      extract frames from your video files. I suppose you could use it to
-      determine the number of replicas to use to detect things in the images as
-      well but I've found that anything more the 2 has diminishing returns.
-    - `HOST_COUNT` Set this to the number of machines you're running this on.
+    - `WORKERS_PER_HOST` (currently does nothing but it might sime day)
+    - `HOST_COUNT` (ditto)
 * **Run it!** You should be able to run the AWS version of the docker compose
   file along with the AWS version of the .env file on the GPU instance(s) as
   well as your local machine like so:
@@ -233,7 +234,7 @@ git clone --recursive https://github.com/dmlc/decord
 docker build -t video-processor:latest .
 ```
 
-The build will probably take around 5 minutes and use around 10GB of disk.
+The build will probably take around 5-10 minutes and use around 10GB of disk.
 
 ### How this project is stitched together
 
@@ -248,7 +249,8 @@ tasks](processor/tasks.py) and in the names of the services in the
 `WORKERS_PER_HOST` and `HOST_COUNT` and figures out how to distribute the work
 of extracting frames from the video across the workers that you have available.
 I suppose there could be some additional steps in there eventually but that's
-enough for now. 
+enough for now. **This step is currently turned off since it really seemed like
+it wasn't helping (in fact it probably made things worst)** 
 
 **Extract frames from the video** As I'm sure you've guessed, this iterates
 through the video and saves out each frame as a separate image and makes a row
