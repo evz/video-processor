@@ -42,7 +42,7 @@ services:
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
       WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
       STORAGE_MOUNT: /output
-    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'analyze', '--concurrency', '1']
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'chunk_video', '--concurrency', '1']
     deploy:
       replicas: 1
       resources:
