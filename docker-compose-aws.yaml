@@ -21,8 +21,10 @@ services:
     ports:
       - "8000:8000"
   
-  analyze:
+  chunk_image:
     image: ${DOCKER_IMAGE}
+    volumes:
+      - ${STORAGE_MOUNT}:/output
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DB_HOST: ${DB_HOST}
@@ -39,6 +41,7 @@ services:
       FRAMES_BUCKET: ${FRAMES_BUCKET}
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
       WORKER_COUNT: ${WORKERS_PER_HOST} * ${HOST_COUNT}
+      STORAGE_MOUNT: /output
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'analyze', '--concurrency', '1']
     deploy:
       replicas: 1

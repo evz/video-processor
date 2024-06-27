@@ -98,6 +98,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 storages_config = {}
 
+STORAGE_DIR = os.getenv('STORAGE_MOUNT', os.path.dirname(__file__))
+
 if os.getenv('AWS_ACCESS_KEY_ID'):
     FRAMES_BUCKET = os.getenv('FRAMES_BUCKET')
     VIDEOS_BUCKET = os.getenv('VIDEOS_BUCKET')
@@ -119,8 +121,6 @@ if os.getenv('AWS_ACCESS_KEY_ID'):
         },
     }
 else:
-    STORAGE_DIR = os.getenv('STORAGE_MOUNT', os.path.dirname(__file__))
-
     storages_config = {
         "frames": {
             "BACKEND": "django.core.files.storage.FileSystemStorage",
@@ -160,8 +160,8 @@ else:
     raise ImproperlyConfigured('Set either a REDIS_HOST or your AWS credentials for SQS as env vars')
 
 CELERY_TASK_ROUTES = {
-    'processor.tasks.analyze': {
-        'queue': 'analyze'
+    'processor.tasks.chunk_video': {
+        'queue': 'chunk_video'
     },
     'processor.tasks.extract_frames': {
         'queue': 'extract'
@@ -174,4 +174,4 @@ CELERY_RESULT_BACKEND = 'django-db'
 
 # This is probably not the best way to do this but _hopefully_ we're not
 # letting random other processes set this env var
-WORKER_COUNT = int(eval(os.getenv('WORKER_COUNT', 1)))
+WORKER_COUNT = int(eval(os.getenv('WORKER_COUNT', '1')))

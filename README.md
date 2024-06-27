@@ -63,9 +63,9 @@ To use the Docker setup, you'll also need to install the [Nvidia Container
 Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 FWIW, that's probably going to be the vastly simpler way of using this (and, to
 be honest, probably the better way, since it'll be easier to scale and run
-across several systems that way, too). You also won't need to worry about
-getting the CUDA Toolkit setup on your host since the container handles all of
-that for you and just leverages whatever GPU you have on your host. 
+across several systems, too). You also won't need to worry about getting the
+CUDA Toolkit setup on your host since the container handles all of that for you
+and just leverages whatever GPU you have on your host. 
 
 So, to summarize for the people who are just skimming, the prerequisites are:
 
@@ -250,7 +250,7 @@ tasks](processor/tasks.py) and in the names of the services in the
 of extracting frames from the video across the workers that you have available.
 I suppose there could be some additional steps in there eventually but that's
 enough for now. **This step is currently turned off since it really seemed like
-it wasn't helping (in fact it probably made things worst)** 
+it wasn't helping (in fact it probably made things worse)** 
 
 **Extract frames from the video** As I'm sure you've guessed, this iterates
 through the video and saves out each frame as a separate image and makes a row
@@ -294,20 +294,19 @@ farther which was just a non-starter for very large videos.
 I then found `decord` which definitely does things a whole lot faster but has
 the same limitations as OpenCV (since under the hood it seems to be using quite
 a lot of the same primitives). Even though it's faster, it still seems like it
-cani't quite keep up with the rate with which the process that is trying to see
-if there are animals in the frames is working (especially if you're running
-this on more than one machine). I'm guessing this is probably partly
-because of the same thing I ran into with `ffmpeg`: scanning large videos
-takes time and partly because I don't have a machine with 20 GPUs dedicated
-to extracting images from videos so, even if I parallelize that process,
-it's still fighting for resources with the detection process. Especially
-with large videos, `decord` does seem to fail in weird ways when I
-parallelize the process of extracting frames (which seem related to running out
-of memory on the GPU?) So, that's where this project currently sits: a faster
-but imperfect solution. Which doesn't quite feel right to me. Hopefully I'll
-get some more time to work on this before I run out of room to store all my
-security camera videos. All I want is to stare at cute little animals in my
-backyard!
+can't quite keep up with the rate with which the downstream "detection" process
+is working (especially if you're running this on more than one machine). I'm
+guessing this is probably partly because of the same thing I ran into with
+`ffmpeg`: scanning large videos takes time and partly because I don't have a
+machine with 20 GPUs dedicated to extracting images from videos so, even if I
+parallelize that process, it's still fighting for resources with the detection
+process. Especially with large videos, `decord` does seem to fail in weird ways
+when I parallelize the process of extracting frames (which seem related to
+running out of memory on the GPU?) So, that's where this project currently
+sits: a faster but imperfect solution. Which doesn't quite feel right to me.
+Hopefully I'll get some more time to work on this before I run out of room to
+store all my security camera videos. All I want is to stare at cute little
+animals in my backyard!
 
 ### A coyote walking through my backyard in the middle of the night
 

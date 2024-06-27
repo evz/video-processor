@@ -29,13 +29,22 @@ class Video(models.Model):
         return f'Video {self.id}'
 
 
+class VideoChunk(models.Model):
+    name = models.CharField(max_length=500)
+    video = models.ForeignKey(Video, on_delete=models.CASCADE)
+    video_file = models.FileField(storage=storages['videos'])
+    created = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f'VideoChunk - {self.name} from Video {self.video.id}'
+
 def frame_upload_path(instance, filename):
-    video_name = os.path.splitext(instance.video.video_file.name)[0]
+    video_name = os.path.splitext(instance.video_chunk.video_file.name)[0]
     return f'{video_name}/frame{instance.frame_number:07d}.jpg'
 
 
 class Frame(models.Model):
-    video = models.ForeignKey(Video, on_delete=models.CASCADE)
+    video_chunk = models.ForeignKey(VideoChunk, null=True, on_delete=models.CASCADE)
     frame_file = models.FileField(storage=storages['frames'], 
                                   null=True, 
                                   upload_to=frame_upload_path)
