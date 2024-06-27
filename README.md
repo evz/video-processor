@@ -170,6 +170,9 @@ At any rate, the tl;dr to get this running on AWS is:
     - Probably most of the `DB_*` vars based on how you setup your DB instance
     - `WORKERS_PER_HOST` (currently does nothing but it might sime day)
     - `HOST_COUNT` (ditto)
+    - `STORAGE_MOUNT` You'll probably want to use the instance store for this.
+      There's a part in the processing where chunks of the video files get
+      written to disk so you'll need some space.
 * **Run it!** You should be able to run the AWS version of the docker compose
   file along with the AWS version of the .env file on the GPU instance(s) as
   well as your local machine like so:
@@ -245,25 +248,23 @@ AWS that kind of money (yet). You'll see these stages reflected in the [celery
 tasks](processor/tasks.py) and in the names of the services in the
 `docker-compose` files. These stages look like this:
 
-**Analyze the video** Really all this does is takes the inputs you give for
-`WORKERS_PER_HOST` and `HOST_COUNT` and figures out how to distribute the work
-of extracting frames from the video across the workers that you have available.
-I suppose there could be some additional steps in there eventually but that's
-enough for now. **This step is currently turned off since it really seemed like
-it wasn't helping (in fact it probably made things worse)** 
+**Break the video into chunks** I found that the `decord` library was great but
+it choked if I tried to give it video files that were more than a few minutes
+long. Luckily, `ffmpeg` can use your GPU to speed up the process of taking one
+long video and making it into a bunch of shorter videos, which is what is
+happening under the hood here. As one "chunk" of the video is completed, the
+next step in the pipeline (extracting frames from the video) gets kicked off.
+This makes it possible to parallelize the extraction process in a way that
+decord can keep up (and not run out of memory which was the case when I was
+attempting to grab batches of frames from one, very long, video). 
 
-**Extract frames from the video** As I'm sure you've guessed, this iterates
-through the video and saves out each frame as a separate image and makes a row
-for each frame in the DB. This is really where the storage backend you're using
-will come into play since, as I mentioned above, an approximately 90 minute
-video with a framerate of 20 fps will use up about 180GB of disk. If you're
-using S3, you'll need to consider the data transfer costs, too (unless
-you're doing _all_ your processing in AWS). Right now, this is just handled
-by a single worker since the `decord` library does a pretty amazing job of
-quickly extracting the frames far faster than the detection workers can run
-detections on them. If you're getting to the point where you have enough
-detection workers that this process can't keep up, open an issue and we can
-talk about how to parallelize this process.  
+**Extract frames from the video chunks** As I'm sure you've guessed, this
+iterates through the chunks of the video and saves out each frame as a separate
+image and makes a row for each frame in the DB. This is really where the
+storage backend you're using will come into play since, as I mentioned above,
+an approximately 90 minute video with a framerate of 20 fps will use up about
+180GB of disk. If you're using S3, you'll need to consider the data transfer
+costs, too (unless you're doing _all_ your processing in AWS).  
 
 **Detect whether or not there are interesting things in the images** This is
 the meat and potatoes of the process. It uses the MegaDetector v5a model to

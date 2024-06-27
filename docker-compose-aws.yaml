@@ -21,7 +21,7 @@ services:
     ports:
       - "8000:8000"
   
-  chunk_image:
+  chunk_video:
     image: ${DOCKER_IMAGE}
     volumes:
       - ${STORAGE_MOUNT}:/output
