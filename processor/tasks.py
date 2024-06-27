@@ -129,6 +129,21 @@ def chunk_video(video_id):
     monitor_thread.stop()
     monitor_thread.join()
     
+    # Sometimes there's a chunk of the video left that didn't get enqueued.
+    # Make sure to enqueue everything.
+    processing_files = list(os.listdir(output_dir))
+
+    for filename in processing_files:
+        
+        with open(f'{output_dir}/{filename}', 'rb') as f:
+            video_chunk = VideoChunk(name=filename,
+                                     video=video,
+                                     video_file=File(f, filename))
+            video_chunk.save()
+
+        extract_frames.delay(video_chunk.id)
+        os.remove(f'{output_dir}/{filename}')
+
     os.remove(input_filename)
 
 
