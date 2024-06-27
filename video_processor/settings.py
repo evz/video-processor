@@ -171,7 +171,3 @@ CELERY_TASK_ROUTES = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
-
-# This is probably not the best way to do this but _hopefully_ we're not
-# letting random other processes set this env var
-WORKER_COUNT = int(eval(os.getenv('WORKER_COUNT', '1')))
