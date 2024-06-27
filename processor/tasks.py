@@ -52,7 +52,7 @@ class MonitorThread(Thread):
 
             for filename in processing_files:
                 modified_time = os.path.getmtime(f'{output_path}/{filename}')
-                logger.info(f'###### DIFF {time.time() - modified_time}')
+                
                 if (time.time() - modified_time) > 1 and filename not in completed:
 
                     with open(f'{output_path}/{filename}', 'rb') as f:
@@ -63,14 +63,9 @@ class MonitorThread(Thread):
 
                     completed.append(filename)
                     
-                    logger.info('ABOUT TO ENQUEUE .... ')
-
                     extract_frames.delay(video_chunk.id)
                     
-                    # Can probably remove video chunks from the filesystem here
-                    # but I'll do that after some more testing
-                    # 
-                    # os.remove(f'{output_path}/{filename}')
+                    os.remove(f'{output_path}/{filename}')
 
             if self.stopped():
                 break
@@ -133,6 +128,8 @@ def chunk_video(video_id):
 
     monitor_thread.stop()
     monitor_thread.join()
+    
+    os.remove(input_filename)
 
 
 @celery_app.task
