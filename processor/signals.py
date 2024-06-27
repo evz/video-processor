@@ -2,10 +2,10 @@ from django.dispatch import receiver
 from django.db.models.signals import post_save
 
 from processor.models import Video
-from processor.tasks import chunk_video
+from processor.tasks import analyze
 
 
 @receiver(post_save, sender=Video)
 def trigger_chunk_video(sender, **kwargs):
     video = kwargs['instance']
-    chunk_video.delay(video.id)
+    analyze.delay(video.id)

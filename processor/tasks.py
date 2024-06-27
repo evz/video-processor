@@ -20,65 +20,17 @@ from django.conf import settings
 from django.core.files import File
 from video_processor import celery_app
 
-from .models import Video, VideoChunk, Frame, Detection
+from .models import Video, Frame, Detection
 
 logger = logging.getLogger(__name__)
 
-
-class MonitorThread(Thread):
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.stop_event = Event()
-
-    def stop(self):
-        self.stop_event.set()
-
-    def stopped(self):
-        return self.stop_event.is_set()
-
-    def run(self):
-        
-        logger.info(self._args)
-
-        output_path = self._args[0]
-        video = Video.objects.get(id=self._args[1])
-        
-        completed = []
-
-        while True:
-            time.sleep(2.5)
-            processing_files = list(os.listdir(output_path))
-
-            for filename in processing_files:
-                modified_time = os.path.getmtime(f'{output_path}/{filename}')
-                
-                if (time.time() - modified_time) > 1 and filename not in completed:
-
-                    with open(f'{output_path}/{filename}', 'rb') as f:
-                        video_chunk = VideoChunk(name=filename,
-                                                 video=video,
-                                                 video_file=File(f, filename))
-                        video_chunk.save()
-
-                    completed.append(filename)
-                    
-                    extract_frames.delay(video_chunk.id)
-                    
-                    os.remove(f'{output_path}/{filename}')
-
-            if self.stopped():
-                break
-
-
 @celery_app.task
-def chunk_video(video_id):
+def analyze(video_id):
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
     # maddening since this gets triggered by the `post_save` hook but,
     # whatever. Now you know why this retry crap is here.
     retries = 0
-    logger.info(f'received {video_id}')
     
     while retries <= 5:
         try:
@@ -90,78 +42,38 @@ def chunk_video(video_id):
                 raise e
             retries += 1
             time.sleep(0.1)
-    
-    input_video_dir = os.path.join(settings.STORAGE_DIR, 'input_videos')
-    output_video_dir = os.path.join(settings.STORAGE_DIR, 'output_videos')
-    video_basename = os.path.basename(video.video_file.name).split('.')[0]
-    output_dir = os.path.join(output_video_dir, video_basename)
-    
-    os.makedirs(input_video_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
 
-    input_filename = os.path.join(input_video_dir, video.video_file.name)
-    
-    with open(input_filename, 'wb') as f:
-        f.write(video.video_file.read())
-    
-    monitor_thread = MonitorThread(args=[output_dir, video_id])
-    monitor_thread.start()
-
-    subprocess.run([
-        'ffmpeg',
-        '-hwaccel',
-        'cuda',
-        '-i', 
-        f'{input_filename}',
-        '-c:v',
-        'h264_nvenc',
-        '-map',
-        '0',
-        '-segment_time',
-        '00:05:00',
-        '-f',
-        'segment',
-        '-reset_timestamps',
-        '1', 
-        f'{output_dir}/{video_basename}%03d.mp4'
-    ])
-
-    monitor_thread.stop()
-    monitor_thread.join()
-    
-    os.remove(input_filename)
-
-
-@celery_app.task
-def extract_frames(video_chunk_id):
-    
-    # It looks like there's a chance that the message gets picked up by a
-    # worker before the row gets saved to the DB, I guess. This is somewhat
-    # maddening since this gets triggered by the `post_save` hook but,
-    # whatever. Now you know why this retry crap is here.
-    retries = 0
-    
-    while retries <= 5:
-        try:
-            video = VideoChunk.objects.get(id=video_chunk_id)
-            break
-        except VideoChunk.DoesNotExist as e:
-            logger.info(f'video {video_chunk_id} is not here I guess')
-            if retries == 5:
-                raise e
-            retries += 1
-            time.sleep(0.1)
-
-    logger.info(f'found video {video_chunk_id}')
+    logger.info(f'found video {video_id}')
     video_bytes = BytesIO(video.video_file.read())
     video_reader = VideoReader(video_bytes, ctx=gpu(0))
     
-    for frame_number, frame in enumerate(video_reader):
+    frame_count = len(video_reader)
+    worker_count = settings.EXTRACT_WORKER_COUNT * settings.HOST_COUNT
+
+    frame_list = numpy.array(list(range(1, frame_count)))
+    chunks = [[a[0], a[-1]] for a in numpy.array_split(frame_list, worker_count)]
+
+    for start_frame, end_frame in chunks:
+        extract_frames.delay(video.id, int(start_frame), int(end_frame))
+
+
+@celery_app.task
+def extract_frames(video_id,
+                   start_frame,
+                   end_frame):
+    
+    video = Video.objects.get(id=video_id)
+
+    video_bytes = BytesIO(video.video_file.read())
+    video_reader = VideoReader(video_bytes, ctx=gpu(0))
+    frame_batch = video_reader.get_batch(list(range(start_frame, end_frame + 1)))
+
+    for frame_number, frame in enumerate(video_reader, start_frame):
         scaled = cv2.resize(frame.asnumpy(), (1920, 1080))
         _, encoded_frame = cv2.imencode('.jpg', scaled, [cv2.IMWRITE_JPEG_QUALITY, 90])
         image = BytesIO(encoded_frame)
 
-        frame = Frame(video_chunk=video,
+        frame = Frame(video=video,
                       frame_file=File(image, f'frame{frame_number:07d}.jpg'),
                       frame_number=frame_number,
                       status='ENQUEUED')
