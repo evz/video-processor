@@ -54,7 +54,7 @@ class Frame(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f'{self.video.name} - Frame {self.frame_number}'
+        return f'{self.video_chunk.name} - Frame {self.frame_number}'
 
 
 class Detection(models.Model):
