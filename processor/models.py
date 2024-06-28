@@ -34,6 +34,7 @@ class VideoChunk(models.Model):
     video = models.ForeignKey(Video, on_delete=models.CASCADE)
     video_file = models.FileField(storage=storages['videos'])
     created = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     
     def __str__(self):
         return f'VideoChunk - {self.name} from Video {self.video.id}'

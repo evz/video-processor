@@ -168,6 +168,13 @@ def extract_frames(video_chunk_id):
             time.sleep(0.1)
 
     logger.info(f'found video {video_chunk_id}')
+    
+    if video.status != 'ENQUEUED':
+        return
+
+    video.status = 'PROCESSING'
+    video.save()
+    
     video_bytes = BytesIO(video.video_file.read())
     video_reader = VideoReader(video_bytes, ctx=gpu(0))
     
@@ -183,12 +190,20 @@ def extract_frames(video_chunk_id):
         frame.save()
         
         detect.delay(frame.id)
+    
+    video.status = 'COMPLETED'
+    video.save()
 
 
 detector = None
 
 @celery_app.task
 def detect(frame_id):
+    
+    frame = Frame.objects.get(id=frame_id)
+    
+    if frame.status != 'ENQUEUED':
+        return
 
     global detector 
     
@@ -196,7 +211,6 @@ def detect(frame_id):
         from detection.run_detector import load_detector
         detector = load_detector('MDV5A')
 
-    frame = Frame.objects.get(id=frame_id)
     frame.status = 'PROCESSING'
     frame.save()
     

@@ -17,17 +17,18 @@ As of the summer of 2024, I'm still trying to figure out how to speed it up
 without spending thousands on GPU instances on AWS (or a suped up desktop or
 something) and, honestly, I think I've reached the limits of what my laptop
 equipped with an Nvidia RTX 2070 can do. To process around 90 minutes of video
-is currently taking me about 4.5 hours on my laptop. **However** ... remember
+is currently taking me about 3.25 hours on my laptop. **However** ... remember
 how I said I started with what I know about running distributed computer
 programs? Well, I put together a Dockerfile and docker-compose.yaml that one
 _could_ use to run this across several GPU equipped EC2 instances or something.
 Note that this probably requires a trust fund or some other means by which you
 can finance this without impacting your ability to pay rent. I processed
 exactly _one_ approximately 90 minute long video on a `g5.xlarge` instance and
-my laptop and it took XXXXXX. So, I guess you can use that information however
-you want to. I'll get into the nitty gritty of how to set this project up to
-run that way further down in the README but first let's talk about what it
-takes to run it in the first place.
+my laptop and it took ... about 90 munutes. Which I guess means I could have
+just sat there and watched it myself. :shrug: You can use that information
+however you want to. I'll get into the nitty gritty of how to set this project
+up to run that way further down in the README but first let's talk about what
+it takes to run it in the first place.
 
 ### Prerequisites
 
@@ -55,9 +56,10 @@ you're messing around with it and building different versions, it can add up.
 Besides space, the disk needs to be relatively fast. So, if you're thinking
 "I've got a big 'ol USB backup drive I can use for this", just be prepared to
 wait because having fast disk ends up making a real difference. Further down
-when I talk about how to distribute this across several systems and the setup
-seamlessly uses AWS S3 for a storage backend. This is _fine_ I guess but,
-again, using a local, fast disk really makes it better.
+when I talk about how to distribute this across several systems, the setup
+seamlessly uses AWS S3 for a storage backend. This is _fine_ I guess (and
+really the only way to make it work in a distributed way) but, again, using a
+local, fast disk really makes it better.
 
 To use the Docker setup, you'll also need to install the [Nvidia Container
 Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
@@ -93,7 +95,7 @@ cp .env.local.example .env.local
 * Run the docker compose file using the copy of the env file you just made:
 
 ```
-docker compose -f docker-compose-local.yaml --env-file .env.local
+docker compose -f docker-compose-local.yaml --env-file .env.local up
 ```
 
 That's basically it. You should get an `admin` container for free.  By default,
@@ -168,16 +170,26 @@ At any rate, the tl;dr to get this running on AWS is:
     - `FRAMES_BUCKET`
     - `VIDEOS_BUCKET`
     - Probably most of the `DB_*` vars based on how you setup your DB instance
-    - `WORKERS_PER_HOST` (currently does nothing but it might sime day)
-    - `HOST_COUNT` (ditto)
+    - `EXTRACT_WORKERS_PER_HOST` Configures the number of replicas to make that
+      will be extracting images from the video chunks. On a `g5.xlarge` I was
+      able to get away with 4. On my laptop with an RTX 2070, I used 2. 
+    - `DETECT_WORKERS_PER_HOST` Configures the number of replicas to make that
+      will work on finding things in the frames of the videos. On a `g5.xlarge`
+      I was able to use 4. On my laptop with an RTX 2070, I used 2.
     - `STORAGE_MOUNT` You'll probably want to use the instance store for this.
       There's a part in the processing where chunks of the video files get
-      written to disk so you'll need some space.
+      written to disk so you'll need some space. They get cleaned up as they
+      are being processed but, still something worth noting. 
 * **Run it!** You should be able to run the AWS version of the docker compose
   file along with the AWS version of the .env file on the GPU instance(s) as
   well as your local machine like so:
 ```
-docker compose -f docker-compose-aws.yaml --env-file .env.aws
+# Run the admin, detect and extract containers locally
+docker compose -f docker-compose-aws.yaml --env-file .env.aws up admin detect extract
+
+# ... and on your GPU instance ...
+# Run the detect, extract and chunk_video containers
+docker compose -f docker-compose-aws.yaml --env-file .env.aws up chunk_video detect extract
 ```
 * **Process a file** This is the same as on a local setup. Just navigate to
   `http://127.0.0.1:8000/admin` on your local machine, login and then click
@@ -253,10 +265,11 @@ it choked if I tried to give it video files that were more than a few minutes
 long. Luckily, `ffmpeg` can use your GPU to speed up the process of taking one
 long video and making it into a bunch of shorter videos, which is what is
 happening under the hood here. As one "chunk" of the video is completed, the
-next step in the pipeline (extracting frames from the video) gets kicked off.
-This makes it possible to parallelize the extraction process in a way that
-decord can keep up (and not run out of memory which was the case when I was
-attempting to grab batches of frames from one, very long, video). 
+next step in the pipeline (extracting frames from the video) gets kicked off
+for that chunk. This makes it possible to parallelize the extraction process
+in a way that decord can keep the detection queue filled (and not run out of
+memory which was the case when I was attempting to grab batches of frames from
+one, very long, video). 
 
 **Extract frames from the video chunks** As I'm sure you've guessed, this
 iterates through the chunks of the video and saves out each frame as a separate
@@ -264,7 +277,8 @@ image and makes a row for each frame in the DB. This is really where the
 storage backend you're using will come into play since, as I mentioned above,
 an approximately 90 minute video with a framerate of 20 fps will use up about
 180GB of disk. If you're using S3, you'll need to consider the data transfer
-costs, too (unless you're doing _all_ your processing in AWS).  
+costs ($$$ as well as time), too (unless you're doing _all_ your processing in
+AWS).  
 
 **Detect whether or not there are interesting things in the images** This is
 the meat and potatoes of the process. It uses the MegaDetector v5a model to
@@ -278,9 +292,10 @@ video gets broken apart into individual images for each frame. If you look back
 in the git history for this repo, you'll notice that I was using OpenCV to
 extract the frames at first. The problem I had with that was that, for my
 videos in particular, OpenCV would end up not extracting all of the frames in
-an individual file. This seems to have something to do with the video codec
-that is used to encode the files on my little security camera system doesn't
-have very good metadata so any open source tool just gets garbage in. 
+an individual file. This seems to have something to do with the fact that the
+video codec that is used to encode the files on my little security camera
+system doesn't have very good metadata so any open source tool just gets
+garbage in. 
 
 I did find that `ffmpeg` could extract all the frames if you gave it the
 correct incantations but it was always limited since you can only run it in one
@@ -294,20 +309,14 @@ farther which was just a non-starter for very large videos.
 
 I then found `decord` which definitely does things a whole lot faster but has
 the same limitations as OpenCV (since under the hood it seems to be using quite
-a lot of the same primitives). Even though it's faster, it still seems like it
-can't quite keep up with the rate with which the downstream "detection" process
-is working (especially if you're running this on more than one machine). I'm
-guessing this is probably partly because of the same thing I ran into with
-`ffmpeg`: scanning large videos takes time and partly because I don't have a
-machine with 20 GPUs dedicated to extracting images from videos so, even if I
-parallelize that process, it's still fighting for resources with the detection
-process. Especially with large videos, `decord` does seem to fail in weird ways
-when I parallelize the process of extracting frames (which seem related to
-running out of memory on the GPU?) So, that's where this project currently
-sits: a faster but imperfect solution. Which doesn't quite feel right to me.
-Hopefully I'll get some more time to work on this before I run out of room to
-store all my security camera videos. All I want is to stare at cute little
-animals in my backyard!
+a lot of the same primitives). I was able to get around the limitation that
+`decord` seems to have regarding very large videos (aka, it chokes on them) by
+breaking large videos into smaller chunks but it still kinda sucks that I can't
+seem to be able to actually extract all of the frames from my videos. So,
+that's where this project currently sits: a faster but imperfect solution.
+Which doesn't quite feel right to me. Hopefully I'll get some more time to
+work on this before I run out of room to store all my security camera videos.
+All I want is to stare at cute little animals in my backyard!
 
 ### A coyote walking through my backyard in the middle of the night
 
