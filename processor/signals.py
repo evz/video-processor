@@ -8,4 +8,6 @@ from processor.tasks import chunk_video
 @receiver(post_save, sender=Video)
 def trigger_chunk_video(sender, **kwargs):
     video = kwargs['instance']
-    chunk_video.delay(video.id)
+
+    if video.status == 'ENQUEUED':
+        chunk_video.delay(video.id)

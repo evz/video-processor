@@ -4,9 +4,12 @@ import subprocess
 import logging
 import math
 import json
+import time
+import itertools
+import shutil
+
 from io import BytesIO
 from pathlib import Path
-import time
 from threading import Thread, Event
 
 import numpy
@@ -15,6 +18,7 @@ from requests_toolbelt.multipart.decoder import MultipartDecoder
 from PIL import Image
 from decord import VideoReader, gpu
 import cv2
+from megadetector.visualization.visualization_utils import render_detection_bounding_boxes
 
 from django.conf import settings
 from django.core.files import File
@@ -54,11 +58,14 @@ class MonitorThread(Thread):
                 modified_time = os.path.getmtime(f'{output_path}/{filename}')
                 
                 if (time.time() - modified_time) > 1 and filename not in completed:
+                    
+                    sequence_number = int(filename.split('.')[0][-3:])
 
                     with open(f'{output_path}/{filename}', 'rb') as f:
                         video_chunk = VideoChunk(name=filename,
                                                  video=video,
-                                                 video_file=File(f, filename))
+                                                 video_file=File(f, filename),
+                                                 sequence_number=sequence_number)
                         video_chunk.save()
 
                     completed.append(filename)
@@ -98,12 +105,27 @@ def chunk_video(video_id):
     
     os.makedirs(input_video_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-
+    
     input_filename = os.path.join(input_video_dir, video.video_file.name)
     
-    with open(input_filename, 'wb') as f:
-        f.write(video.video_file.read())
+    video_bytes = BytesIO(video.video_file.read())
     
+    with open(input_filename, 'wb') as f:
+        video_reader = VideoReader(video_bytes, ctx=gpu(0))
+        video_bytes.seek(0)
+        f.write(video_bytes.read())
+    
+    # Need to get the frame rate for the incoming video
+    video_cap = cv2.VideoCapture(input_filename)
+    frame_rate = video_cap.get(cv2.CAP_PROP_FPS)
+    video_cap.release()
+
+    video.status = 'PROCESSING'
+    video.name = video_basename
+    video.frame_count = len(video_reader)
+    video.frame_rate = frame_rate
+    video.save()
+
     monitor_thread = MonitorThread(args=[output_dir, video_id])
     monitor_thread.start()
 
@@ -118,7 +140,7 @@ def chunk_video(video_id):
         '-map',
         '0',
         '-segment_time',
-        '00:05:00',
+        '00:05:00', # This is somewhat arbitrary but it works
         '-f',
         'segment',
         '-reset_timestamps',
@@ -158,7 +180,7 @@ def extract_frames(video_chunk_id):
     
     while retries <= 5:
         try:
-            video = VideoChunk.objects.get(id=video_chunk_id)
+            video_chunk = VideoChunk.objects.get(id=video_chunk_id)
             break
         except VideoChunk.DoesNotExist as e:
             logger.info(f'video {video_chunk_id} is not here I guess')
@@ -169,30 +191,37 @@ def extract_frames(video_chunk_id):
 
     logger.info(f'found video {video_chunk_id}')
     
-    if video.status != 'ENQUEUED':
+    if video_chunk.status != 'ENQUEUED':
         return
 
-    video.status = 'PROCESSING'
-    video.save()
+    video_chunk.status = 'PROCESSING'
+    video_chunk.save()
     
-    video_bytes = BytesIO(video.video_file.read())
+    video_bytes = BytesIO(video_chunk.video_file.read())
     video_reader = VideoReader(video_bytes, ctx=gpu(0))
-    
-    for frame_number, frame in enumerate(video_reader):
+
+    # Each chunk is 5 minutes. Multiply that by the frame rate of the video and
+    # the sequence number of the video chunk to get the starting frame number
+    # for the chunk. Add one because we don't want to have the frame numbers be
+    # zero indexed.
+    start_frame_number = (video_chunk.sequence_number * video_chunk.video.frame_rate * 5 * 60) + 1
+
+    for frame_number, frame in enumerate(video_reader, start=start_frame_number):
         scaled = cv2.resize(frame.asnumpy(), (1920, 1080))
         _, encoded_frame = cv2.imencode('.jpg', scaled, [cv2.IMWRITE_JPEG_QUALITY, 90])
         image = BytesIO(encoded_frame)
 
-        frame = Frame(video_chunk=video,
+        frame = Frame(video_chunk=video_chunk,
                       frame_file=File(image, f'frame{frame_number:07d}.jpg'),
+                      detections_file=None,
                       frame_number=frame_number,
                       status='ENQUEUED')
         frame.save()
         
         detect.delay(frame.id)
     
-    video.status = 'COMPLETED'
-    video.save()
+    video_chunk.status = 'COMPLETED'
+    video_chunk.save()
 
 
 detector = None
@@ -208,7 +237,7 @@ def detect(frame_id):
     global detector 
     
     if not detector:
-        from detection.run_detector import load_detector
+        from megadetector.detection.run_detector import load_detector
         detector = load_detector('MDV5A')
 
     frame.status = 'PROCESSING'
@@ -255,3 +284,97 @@ def detect(frame_id):
     
     frame.status = 'COMPLETED'
     frame.save()
+
+
+@celery_app.task
+def find_completed_videos():
+    for video in Video.objects.exclude(status='COMPLETED'):
+        completed_frames = Frame.objects.filter(video_chunk__video_id=video.id).filter(status='COMPLETED').count()
+
+        # Sometimes we can end up with more frames extracted from the video
+        # than what decord thought there were to begin with. I really don't
+        # understand why but, that's why we have to compare things this way ...
+        if completed_frames >= video.frame_count:
+            video.status = 'COMPLETED'
+            video.save()
+            
+            draw_detections.delay(video.id)
+
+
+@celery_app.task
+def draw_detections(video_id):
+
+    def group_by_frame(detection):
+        return detection.frame
+    
+    detections = Detection.objects.filter(frame__video_chunk__video_id=video_id).order_by('frame__frame_number')
+    for frame, detections in itertools.groupby(detections, key=group_by_frame):
+        detections_list = []
+
+        for detection in detections:
+            d = {
+                'category': detection.category,
+                'conf': detection.confidence,
+                'bbox': [
+                    detection.x_coord,
+                    detection.y_coord,
+                    detection.box_width,
+                    detection.box_height
+                ]
+            }
+            detections_list.append(d)
+        
+        frame_image = Image.open(BytesIO(frame.frame_file.read()))
+        frame_image.load()
+
+        render_detection_bounding_boxes(detections_list, frame_image)
+        output_image = BytesIO()
+        frame_image.save(output_image, format='JPEG')
+        output_image.seek(0)
+        frame.detections_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
+
+        logger.info(f'saving detections for frame {frame}')
+
+        frame.save()
+
+    make_detection_video.delay(video_id)
+
+
+@celery_app.task
+def make_detection_video(video_id):
+    video = Video.objects.get(id=video_id)
+
+    output_detections_dir = os.path.join(settings.STORAGE_DIR, 'detections')
+    video_basename = os.path.basename(video.video_file.name).split('.')[0]
+    output_dir = os.path.join(output_detections_dir, video_basename)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    frames = Frame.objects.filter(video_chunk__video_id=video_id)\
+                           .exclude(detections_file='')\
+                           .order_by('frame_number')
+
+    for index, frame in enumerate(frames):
+        print(frame)
+        with open(f'{output_dir}/detection{index:07d}.jpg', 'wb') as f:
+            f.write(frame.detections_file.read())
+
+
+    subprocess.run([
+        'ffmpeg',
+        '-hwaccel',
+        'cuda',
+        '-framerate',
+        '20',
+        '-i',
+        f'{output_dir}/detection%07d.jpg',
+        '-c:v',
+        'h264_nvenc',
+        f'{output_dir}/{video_basename}-detections.mp4',
+    ])
+
+    with open(f'{output_dir}/{video_basename}-detections.mp4', 'rb') as f:
+        video.detections_file = File(f, f'{video_basename}-detections.mp4')
+        video.save()
+
+    shutil.rmtree(output_dir)

@@ -101,6 +101,33 @@ services:
               count: 1
               capabilities: [gpu]
   
+  create_output:
+    image: ${DOCKER_IMAGE}
+    volumes:
+      - .:/code
+      - ${STORAGE_MOUNT}:/output
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DB_HOST: ${DB_HOST}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_PORT: ${DB_PORT}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
+      REDIS_HOST: ${REDIS_HOST}
+      STORAGE_MOUNT: /output
+    command: ['celery', '-A', 'video_processor', 'worker', '-B', '-l', 'INFO', '-Q', 'create_output', '--concurrency', '1']
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  
 #   If you just want to process things on a single machine, you can use these
 #   containers for your DB and Celery Broker, respectively. Just make sure you
 #   change your .env file to match.  

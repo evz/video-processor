@@ -20,7 +20,9 @@ DETECTION_CATEGORIES = {
 class Video(models.Model):
     name = models.CharField(max_length=1000, null=True)
     video_file = models.FileField(storage=storages['videos'])
+    detections_file = models.FileField(storage=storages['videos'], null=True)
     frame_count = models.IntegerField(null=True)
+    frame_rate = models.IntegerField(default=20)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
@@ -35,7 +37,8 @@ class VideoChunk(models.Model):
     video_file = models.FileField(storage=storages['videos'])
     created = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
-    
+    sequence_number = models.IntegerField(default=1)
+
     def __str__(self):
         return f'VideoChunk - {self.name} from Video {self.video.id}'
 
@@ -44,11 +47,19 @@ def frame_upload_path(instance, filename):
     return f'{video_name}/frame{instance.frame_number:07d}.jpg'
 
 
+def detection_upload_path(instance, filename):
+    video_name = os.path.splitext(instance.video_chunk.video_file.name)[0]
+    return f'{video_name}/detections/frame{instance.frame_number:07d}.jpg'
+
+
 class Frame(models.Model):
     video_chunk = models.ForeignKey(VideoChunk, null=True, on_delete=models.CASCADE)
     frame_file = models.FileField(storage=storages['frames'], 
                                   null=True, 
                                   upload_to=frame_upload_path)
+    detections_file = models.FileField(storage=storages['frames'], 
+                                       null=True, 
+                                       upload_to=detection_upload_path)
     frame_number = models.IntegerField()
     status = models.CharField(max_length=10, choices=STATI, db_index=True)
     created = models.DateTimeField(auto_now_add=True)

@@ -169,5 +169,21 @@ CELERY_TASK_ROUTES = {
     'processor.tasks.detect': {
         'queue': 'detect'
     },
+    'processor.tasks.draw_detections': {
+        'queue': 'create_output'
+    },
+    'processor.tasks.find_completed_videos': {
+        'queue': 'create_output'
+    },
+    'processor.tasks.make_detection_video': {
+        'queue': 'create_output'
+    },
 }
 CELERY_RESULT_BACKEND = 'django-db'
+
+CELERY_BEAT_SCHEDULE = {
+    'find-completed-videos': {
+        'task': 'processor.tasks.find_completed_videos',
+        'schedule': 10.0,
+    }
+}
