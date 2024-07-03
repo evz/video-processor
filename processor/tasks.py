@@ -222,6 +222,9 @@ def extract_frames(video_chunk_id):
     
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
+    
+    if settings.CLEANUP_AFTER_PROCESSING:
+        os.remove(video_chunk.video_file.path)
 
 
 detector = None
@@ -285,20 +288,25 @@ def detect(frame_id):
     frame.status = 'COMPLETED'
     frame.save()
 
+    if settings.CLEANUP_AFTER_PROCESSING and not result['detections']:
+        os.remove(frame.frame_file.path)
+
 
 @celery_app.task
 def find_completed_videos():
     for video in Video.objects.exclude(status='COMPLETED'):
         completed_frames = Frame.objects.filter(video_chunk__video_id=video.id).filter(status='COMPLETED').count()
+        
+        if video.frame_count:
 
-        # Sometimes we can end up with more frames extracted from the video
-        # than what decord thought there were to begin with. I really don't
-        # understand why but, that's why we have to compare things this way ...
-        if completed_frames >= video.frame_count:
-            video.status = 'COMPLETED'
-            video.save()
-            
-            draw_detections.delay(video.id)
+            # Sometimes we can end up with more frames extracted from the video
+            # than what decord thought there were to begin with. I really don't
+            # understand why but, that's why we have to compare things this way ...
+            if completed_frames >= video.frame_count:
+                video.status = 'COMPLETED'
+                video.save()
+                
+                draw_detections.delay(video.id)
 
 
 @celery_app.task
@@ -331,9 +339,7 @@ def draw_detections(video_id):
         output_image = BytesIO()
         frame_image.save(output_image, format='JPEG')
         output_image.seek(0)
-        frame.detections_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
-
-        logger.info(f'saving detections for frame {frame}')
+        frame.frame_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
 
         frame.save()
 
@@ -355,7 +361,6 @@ def make_detection_video(video_id):
                            .order_by('frame_number')
 
     for index, frame in enumerate(frames):
-        print(frame)
         with open(f'{output_dir}/detection{index:07d}.jpg', 'wb') as f:
             f.write(frame.detections_file.read())
 
@@ -365,7 +370,7 @@ def make_detection_video(video_id):
         '-hwaccel',
         'cuda',
         '-framerate',
-        '20',
+        f'{video.frame_rate}',
         '-i',
         f'{output_dir}/detection%07d.jpg',
         '-c:v',

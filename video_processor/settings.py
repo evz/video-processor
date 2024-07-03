@@ -51,6 +51,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'django.template.context_processors.media',
             ],
         },
     },
@@ -100,6 +101,11 @@ storages_config = {}
 
 STORAGE_DIR = os.getenv('STORAGE_MOUNT', os.path.dirname(__file__))
 
+if os.getenv('CLEANUP_AFTER_PROCESSING') == 'yes':
+    CLEANUP_AFTER_PROCESSING = True
+else:
+    CLEANUP_AFTER_PROCESSING = False
+
 if os.getenv('AWS_ACCESS_KEY_ID'):
     FRAMES_BUCKET = os.getenv('FRAMES_BUCKET')
     VIDEOS_BUCKET = os.getenv('VIDEOS_BUCKET')
@@ -144,6 +150,9 @@ STORAGES = {
     },
     **storages_config
 }
+
+MEDIA_ROOT = STORAGE_DIR
+MEDIA_URL = '/media/'
 
 # CELERY settings
 

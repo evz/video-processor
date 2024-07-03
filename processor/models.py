@@ -42,6 +42,7 @@ class VideoChunk(models.Model):
     def __str__(self):
         return f'VideoChunk - {self.name} from Video {self.video.id}'
 
+
 def frame_upload_path(instance, filename):
     video_name = os.path.splitext(instance.video_chunk.video_file.name)[0]
     return f'{video_name}/frame{instance.frame_number:07d}.jpg'

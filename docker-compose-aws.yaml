@@ -16,6 +16,7 @@ services:
       AWS_REGION: ${AWS_REGION}
       FRAMES_BUCKET: ${FRAMES_BUCKET}
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
+      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
     ports:
       - "8000:8000"
@@ -40,6 +41,7 @@ services:
       FRAMES_BUCKET: ${FRAMES_BUCKET}
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
       STORAGE_MOUNT: /output
+      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'chunk_video', '--concurrency', '1']
     deploy:
       replicas: 1
@@ -67,6 +69,7 @@ services:
       AWS_REGION: ${AWS_REGION}
       FRAMES_BUCKET: ${FRAMES_BUCKET}
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
+      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--pool', 'solo', '--concurrency', '1']
     deploy:
       replicas: ${EXTRACT_WORKERS_PER_HOST}
@@ -94,6 +97,7 @@ services:
       AWS_REGION: ${AWS_REGION}
       FRAMES_BUCKET: ${FRAMES_BUCKET}
       VIDEOS_BUCKET: ${VIDEOS_BUCKET}
+      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
     deploy:
       replicas: ${DETECT_WORKERS_PER_HOST}
