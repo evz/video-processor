@@ -219,11 +219,19 @@ The `category` is what kind of thing (1 = animal, 2 = person, 3 = vehicle) is
 represented by the detection. The `confidence` is how confident the model was
 that it is, in fact, the thing that it thinks it is. The coordinates represent
 the upper left hand corner of where the detection was in the image and you can
-use the `box_width` and `box_height` to figure out how big the box is. These
-are ultimately something that can be used by PIL to actually go a draw a box on
-the image, if that's your thing. I'll be working on a piece of the pipeline
-here soon to actually take care of that and output a video but I haven't gotten
-there yet. 
+use the `box_width` and `box_height` to figure out how big the box is. 
+
+There's a process that checks every so often to see if there are any videos
+that are done processing and, if so, it kicks off the process of taking all the
+images where something was detected and stitches them back together into a
+video. When that's done, you'll be able to check it out by clicking on the name
+of the video in the Django admin. 
+
+**List of videos uploaded for processing**
+![](list-view.png)
+
+**Detail of completed video**
+![](detail-view.png)
 
 ### Docker build process
 This project relies upon [`decord`](https://github.com/dmlc/decord) to quickly
@@ -284,6 +292,15 @@ AWS).
 the meat and potatoes of the process. It uses the MegaDetector v5a model to
 figure out if there are likely to be animals, people, or vehicles in each frame
 of the video and, if it finds things, it saves its findings to a DB table. 
+
+**Check if videos are done processing and stitch the interesting images back
+into a video** There's a periodic task that runs every 10 seconds to see if
+there are any videos that are done processing. If so, it kicks off another task
+which takes all the images where something was detected and stitches them back
+together into a video. If you take a look at the table showing the list of
+videos you've uploaded for processing, you should be able to see whether
+there's a video available or not. You can check it out by clicking on the name
+of the video and looking at its detail page.
 
 ### Things I've run into which are slightly puzzling to me
 
