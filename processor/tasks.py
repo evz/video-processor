@@ -80,7 +80,7 @@ class MonitorThread(Thread):
                 break
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, max_retries=None)
 def chunk_video(self, video_id):
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
@@ -177,7 +177,7 @@ def chunk_video(self, video_id):
     os.remove(input_filename)
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, max_retries=None)
 def extract_frames(self, video_chunk_id):
     
     # It looks like there's a chance that the message gets picked up by a
@@ -320,7 +320,7 @@ def find_completed_videos():
                 draw_detections.delay(video.id)
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, max_retries=None)
 def draw_detections(self, video_id):
 
     def group_by_frame(detection):
@@ -360,7 +360,7 @@ def draw_detections(self, video_id):
     make_detection_video.delay(video_id)
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, max_retries=None)
 def make_detection_video(self, video_id):
     video = Video.objects.get(id=video_id)
 
