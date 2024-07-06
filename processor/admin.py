@@ -34,7 +34,7 @@ class VideoAdmin(admin.ModelAdmin):
         'progress',
         'formatted_created',
         'formatted_updated',
-        'detections_found',
+        'detection_count',
         'detection_video_available',
     ]
 
@@ -55,7 +55,7 @@ class VideoAdmin(admin.ModelAdmin):
         if obj.detections_file != '':
             return 'Yes'
     
-    def detections_found(self, obj):
+    def detection_count(self, obj):
         return Detection.objects.filter(frame__video_chunk__video=obj).count()
 
     formatted_created.short_description = 'Created'

@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 import logging
 import math
@@ -13,8 +12,6 @@ from pathlib import Path
 from threading import Thread, Event
 
 import numpy
-import requests
-from requests_toolbelt.multipart.decoder import MultipartDecoder
 from PIL import Image
 from decord import VideoReader, gpu
 import cv2
@@ -47,7 +44,8 @@ class MonitorThread(Thread):
 
         output_path = self._args[0]
         video = Video.objects.get(id=self._args[1])
-        
+        task = self._args[2]
+
         completed = []
 
         while True:
@@ -66,7 +64,11 @@ class MonitorThread(Thread):
                                                  video=video,
                                                  video_file=File(f, filename),
                                                  sequence_number=sequence_number)
-                        video_chunk.save()
+
+                        try:
+                            video_chunk.save()
+                        except OSError as e:
+                            task.retry(exc=e, countdown=60)
 
                     completed.append(filename)
                     
@@ -78,8 +80,8 @@ class MonitorThread(Thread):
                 break
 
 
-@celery_app.task
-def chunk_video(video_id):
+@celery_app.task(bind=True)
+def chunk_video(self, video_id):
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
     # maddening since this gets triggered by the `post_save` hook but,
@@ -109,11 +111,14 @@ def chunk_video(video_id):
     input_filename = os.path.join(input_video_dir, video.video_file.name)
     
     video_bytes = BytesIO(video.video_file.read())
-    
-    with open(input_filename, 'wb') as f:
-        video_reader = VideoReader(video_bytes, ctx=gpu(0))
-        video_bytes.seek(0)
-        f.write(video_bytes.read())
+   
+    try:
+        with open(input_filename, 'wb') as f:
+            video_reader = VideoReader(video_bytes, ctx=gpu(0))
+            video_bytes.seek(0)
+            f.write(video_bytes.read())
+    except OSError as e:
+        self.retry(exc=e, countdown=60)
     
     # Need to get the frame rate for the incoming video
     video_cap = cv2.VideoCapture(input_filename)
@@ -126,7 +131,7 @@ def chunk_video(video_id):
     video.frame_rate = frame_rate
     video.save()
 
-    monitor_thread = MonitorThread(args=[output_dir, video_id])
+    monitor_thread = MonitorThread(args=[output_dir, video_id, self])
     monitor_thread.start()
 
     subprocess.run([
@@ -161,7 +166,10 @@ def chunk_video(video_id):
             video_chunk = VideoChunk(name=filename,
                                      video=video,
                                      video_file=File(f, filename))
-            video_chunk.save()
+            try:
+                video_chunk.save()
+            except OSError as e:
+                self.retry(exc=e, countdown=10)
 
         extract_frames.delay(video_chunk.id)
         os.remove(f'{output_dir}/{filename}')
@@ -169,8 +177,8 @@ def chunk_video(video_id):
     os.remove(input_filename)
 
 
-@celery_app.task
-def extract_frames(video_chunk_id):
+@celery_app.task(bind=True)
+def extract_frames(self, video_chunk_id):
     
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
@@ -216,7 +224,10 @@ def extract_frames(video_chunk_id):
                       detections_file=None,
                       frame_number=frame_number,
                       status='ENQUEUED')
-        frame.save()
+        try:
+            frame.save()
+        except OSError as e:
+            self.retry(exc=e, countdown=60)
         
         detect.delay(frame.id)
     
@@ -309,8 +320,8 @@ def find_completed_videos():
                 draw_detections.delay(video.id)
 
 
-@celery_app.task
-def draw_detections(video_id):
+@celery_app.task(bind=True)
+def draw_detections(self, video_id):
 
     def group_by_frame(detection):
         return detection.frame
@@ -339,15 +350,18 @@ def draw_detections(video_id):
         output_image = BytesIO()
         frame_image.save(output_image, format='JPEG')
         output_image.seek(0)
-        frame.frame_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
-
-        frame.save()
+        frame.detections_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
+        
+        try:
+            frame.save()
+        except OSError as e:
+            self.retry(exc=e, countdown=60)
 
     make_detection_video.delay(video_id)
 
 
-@celery_app.task
-def make_detection_video(video_id):
+@celery_app.task(bind=True)
+def make_detection_video(self, video_id):
     video = Video.objects.get(id=video_id)
 
     output_detections_dir = os.path.join(settings.STORAGE_DIR, 'detections')
@@ -357,12 +371,16 @@ def make_detection_video(video_id):
     os.makedirs(output_dir, exist_ok=True)
     
     frames = Frame.objects.filter(video_chunk__video_id=video_id)\
-                           .exclude(detections_file='')\
-                           .order_by('frame_number')
-
+                          .exclude(detections_file='')\
+                          .order_by('frame_number')
+    
     for index, frame in enumerate(frames):
-        with open(f'{output_dir}/detection{index:07d}.jpg', 'wb') as f:
-            f.write(frame.detections_file.read())
+
+        try:
+            with open(f'{output_dir}/detection{index:07d}.jpg', 'wb') as f:
+                f.write(frame.detections_file.read())
+        except OSError as e:
+            self.retry(exc=e, countdown=60)
 
 
     subprocess.run([
@@ -380,6 +398,10 @@ def make_detection_video(video_id):
 
     with open(f'{output_dir}/{video_basename}-detections.mp4', 'rb') as f:
         video.detections_file = File(f, f'{video_basename}-detections.mp4')
-        video.save()
+
+        try:
+            video.save()
+        except OSError as e:
+            self.retry(exc=e, countdown=60)
 
     shutil.rmtree(output_dir)
