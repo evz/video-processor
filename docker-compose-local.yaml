@@ -95,7 +95,7 @@ services:
       REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
       CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
-    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
+    command: ['celery', '-A', 'video_processor', 'worker', '-l', 'ERROR', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
     deploy:
       replicas: ${DETECT_WORKERS_PER_HOST}
       resources:

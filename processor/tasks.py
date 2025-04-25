@@ -13,7 +13,6 @@ from threading import Thread, Event
 
 import numpy
 from PIL import Image
-from decord import VideoReader, gpu, DECORDError
 import cv2
 from megadetector.visualization.visualization_utils import render_detection_bounding_boxes
 from watchdog.observers import Observer
@@ -98,7 +97,7 @@ def chunk_video(self, video_id):
             retries += 1
             time.sleep(0.1)
     
-    input_video_dir = os.path.join(settings.STORAGE_DIR, 'input_videos')
+    input_video_dir = os.path.join(settings.STORAGE_DIR, 'videos')
     output_video_dir = os.path.join(settings.STORAGE_DIR, 'output_videos')
     video_basename = os.path.basename(video.video_file.name).split('.')[0]
     output_dir = os.path.join(output_video_dir, video_basename)
@@ -108,59 +107,47 @@ def chunk_video(self, video_id):
     
     input_filename = os.path.join(input_video_dir, video.video_file.name)
     
-    video_bytes = BytesIO(video.video_file.read())
-   
-    try:
-        with open(input_filename, 'wb') as f:
-            video_reader = VideoReader(video_bytes, ctx=gpu(0))
-            video_bytes.seek(0)
-            f.write(video_bytes.read())
-    except OSError as e:
-        self.retry(exc=e, countdown=60)
-    except DECORDError as e:
-        logger.error(f'{video.video_file.name} has broken metadata {e}')
-        with open(input_filename, 'wb') as f:
-            chunk_name = os.path.basename(input_filename).split('.')[0]
-            video_chunk = VideoChunk(name=chunk_name,
-                                     video=video,
-                                     video_file=File(f, chunk_name),
-                                     status='FAILED')
-            video_chunk.save()
-        return
-    
     # Need to get the frame rate for the incoming video
     video_cap = cv2.VideoCapture(input_filename)
     frame_rate = video_cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
     video_cap.release()
-
+    
     video.status = 'PROCESSING'
     video.name = video_basename
-    video.frame_count = len(video_reader)
+    video.frame_count = frame_count
     video.frame_rate = frame_rate
     video.save()
 
     monitor_thread = MonitorThread(args=[output_dir])
     monitor_thread.start()
-
+    
     subprocess.run([
         'ffmpeg',
         '-hwaccel',
         'cuda',
+        '-hwaccel_output_format',
+        'cuda',
         '-i', 
         f'{input_filename}',
+        '-init_hw_device',
+        'cuda',
+        '-vf',
+        'scale_cuda=w=1920:h=1080',
         '-c:v',
         'h264_nvenc',
-        '-map',
-        '0',
-        '-segment_time',
-        '00:05:00', # This is somewhat arbitrary but it works
+        '-an',
         '-f',
         'segment',
+        '-segment_time',
+        '00:00:30',
         '-reset_timestamps',
-        '1', 
+        '1',
+        '-map',
+        '0',
         f'{output_dir}/{video_basename}%03d.mp4'
-    ])
-
+    ], check=True)
+    
     monitor_thread.stop()
     monitor_thread.join()
     
@@ -195,49 +182,38 @@ def extract_frames(self, video_chunk_id):
     video_chunk.status = 'PROCESSING'
     video_chunk.save()
     
-    video_bytes = BytesIO(video_chunk.video_file.read())
-   
-    # Sometimes the video chunk was written out badly so decord can't read it.
-    # Log out the name of the video chunk, subtract the frame count of the
-    # chunk from the frame count of the overall video and delete the video
-    # chunk. Not really sure how else to handle this.
-    try:
-        video_reader = VideoReader(video_bytes, ctx=gpu(0))
-    except RuntimeError as e:
-        logger.error(f'Could not read {video_chunk.name} {e}')
-        chunk_frame_count = video_chunk.video.frame_rate * 5 * 60
-
-        if video_chunk.video.frame_count:
-            video_chunk.video.frame_count -= chunk_frame_count
-            video_chunk.video.save()
-
-        video_chunk.status = 'FAILED'
-        video_chunk.save()
-        return
-
-    # Each chunk is 5 minutes. Multiply that by the frame rate of the video and
+    # Each chunk is 30 seconds. Multiply that by the frame rate of the video and
     # the sequence number of the video chunk to get the starting frame number
     # for the chunk. Add one because we don't want to have the frame numbers be
     # zero indexed.
-    start_frame_number = (video_chunk.sequence_number * video_chunk.video.frame_rate * 5 * 60) + 1
+    frame_count = video_chunk.video.frame_rate * 30
+    start_frame_number = (video_chunk.sequence_number * frame_count) + 1
+    output_frames_dir = os.path.join(settings.STORAGE_DIR, 'frames')
+    video_basename = os.path.basename(video_chunk.video.video_file.name).split('.')[0]
+    output_dir = os.path.join(output_frames_dir, video_basename)
 
-    for frame_number, frame in enumerate(video_reader, start=start_frame_number):
-        scaled = cv2.resize(frame.asnumpy(), (1920, 1080))
-        _, encoded_frame = cv2.imencode('.jpg', scaled, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        image = BytesIO(encoded_frame)
+    os.makedirs(output_dir, exist_ok=True)
 
-        frame = Frame(video_chunk=video_chunk,
-                      frame_file=File(image, f'frame{frame_number:07d}.jpg'),
-                      detections_file=None,
-                      frame_number=frame_number,
-                      status='ENQUEUED')
-        try:
+    subprocess.run([
+        'ffmpeg',
+        '-i', 
+        video_chunk.video_file.path,
+        '-start_number',
+        str(start_frame_number),
+        f'{output_dir}/frame-%07d.jpg'
+    ], check=True)
+
+    for frame_number in range(start_frame_number, (start_frame_number + frame_count)):	
+        frame_path = os.path.join(output_dir, f'frame-{frame_number:07d}.jpg')
+        with open(frame_path, 'rb') as image:
+            frame = Frame(video_chunk=video_chunk,
+                          frame_file=File(image, f'frame{frame_number:07d}.jpg'),
+                          detections_file=None,
+                          frame_number=frame_number,
+                          status='ENQUEUED')
             frame.save()
-        except OSError as e:
-            self.retry(exc=e, countdown=60)
-        
-        detect.delay(frame.id)
-    
+        detect.delay(frame.id) 
+
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
     

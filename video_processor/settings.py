@@ -62,11 +62,11 @@ WSGI_APPLICATION = 'video_processor.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME'),
-        'PORT': os.getenv('DB_PORT'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST'),
+        'NAME': os.getenv('DB_NAME', 'processor'),
+        'PORT': os.getenv('DB_PORT', '5432'),
+        'USER': os.getenv('DB_USER', 'processor'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'processor-password'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
     }
 }
 
@@ -99,7 +99,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 storages_config = {}
 
-STORAGE_DIR = os.getenv('STORAGE_MOUNT', os.path.dirname(__file__))
+STORAGE_DIR = os.getenv('STORAGE_MOUNT', os.path.join(os.path.dirname(__file__), '..'))
 
 if os.getenv('CLEANUP_AFTER_PROCESSING') == 'yes':
     CLEANUP_AFTER_PROCESSING = True

@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.5.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
 
 RUN apt-get update && apt-get install -y \
                           make \
@@ -22,12 +22,6 @@ RUN apt-get clean && rm -rf /tmp/* /var/tmp/* /var/lib/apt/lists/* && apt-get -y
 
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 
-COPY decord /code/decord
-COPY decord/Video_Codec_SDK_12.2.72/Lib/linux/stubs/x86_64/* /usr/local/cuda/lib64/stubs/
-RUN echo "/usr/local/cuda/lib64/stubs\n" > /etc/ld.so.conf.d/999-cuda-stubs.conf && ldconfig
-RUN cd decord && rm -rf build && mkdir build && cd build && cmake .. -DUSE_CUDA=ON -DCMAKE_Build_Type=Release && make && cd ../python && python3 setup.py install
-
-RUN pip install --upgrade pip
 COPY requirements.txt /code/
 COPY docker-entrypoint.sh /code/
 RUN chmod a+x /code/docker-entrypoint.sh
@@ -35,8 +29,9 @@ COPY manage.py /code/
 COPY video_processor /code/video_processor
 COPY processor /code/processor
 
-RUN pip install --upgrade "numpy<2.0"
+RUN python3 -m pip config set global.break-system-packages true
 RUN pip install -r requirements.txt
+RUN pip install --upgrade torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 
 EXPOSE 8000
 ENTRYPOINT ["/code/docker-entrypoint.sh"]

@@ -6,5 +6,6 @@ django-celery-results==2.5.1
 python-ffmpeg==2.0.10
 requests==2.31.0
 requests-toolbelt==1.0.0
-megadetector==5.0.15
+megadetector==5.0.27
 django-storages[s3]==1.14.2
+watchdog==2.1.5
