@@ -10,6 +10,7 @@ import shutil
 from io import BytesIO
 from pathlib import Path
 from threading import Thread, Event
+from typing import List, Dict, Optional, Union, TypedDict
 
 import numpy
 from PIL import Image
@@ -25,6 +26,13 @@ from video_processor import celery_app
 from .models import Video, VideoChunk, Frame, Detection
 
 logger = logging.getLogger(__name__)
+
+
+class DetectionResult(TypedDict):
+    """Type definition for MegaDetector detection results."""
+    category: str
+    conf: float
+    bbox: List[float]
 
 
 class VideoChunkCompleted(FileSystemEventHandler):
@@ -79,7 +87,13 @@ class MonitorThread(Thread):
 
 
 @celery_app.task(bind=True, max_retries=None)
-def chunk_video(self, video_id):
+def chunk_video(self, video_id: int) -> None:
+    """
+    Break a video into smaller chunks for parallel processing.
+    
+    Args:
+        video_id: The ID of the Video model instance to process
+    """
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
     # maddening since this gets triggered by the `post_save` hook but,
@@ -155,7 +169,13 @@ def chunk_video(self, video_id):
 
 
 @celery_app.task(bind=True, max_retries=None)
-def extract_frames(self, video_chunk_id):
+def extract_frames(self, video_chunk_id: int) -> None:
+    """
+    Extract individual frames from a video chunk and queue them for detection.
+    
+    Args:
+        video_chunk_id: The ID of the VideoChunk model instance to process
+    """
     
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
@@ -224,7 +244,15 @@ def extract_frames(self, video_chunk_id):
 detector = None
 
 @celery_app.task
-def detect(frame_id):
+def detect(frame_id: int) -> None:
+    """
+    Run AI detection on a single frame to find animals, people, or vehicles.
+    
+    Uses MegaDetector v5a model to analyze the frame and store detection results.
+    
+    Args:
+        frame_id: The ID of the Frame model instance to analyze
+    """
     
     frame = Frame.objects.get(id=frame_id)
     
@@ -287,7 +315,8 @@ def detect(frame_id):
 
 
 @celery_app.task
-def find_completed_videos():
+def find_completed_videos() -> None:
+    """Check for videos that have finished processing and trigger output generation."""
     for video in Video.objects.exclude(status='COMPLETED'):
         completed_frames = Frame.objects.filter(video_chunk__video_id=video.id).filter(status='COMPLETED').count()
         

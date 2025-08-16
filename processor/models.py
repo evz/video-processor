@@ -1,20 +1,24 @@
 import os
+from typing import Dict, Tuple, Literal
 from django.db import models
 from django.core.files.storage import storages
 
 
-STATI = {
+STATI: Dict[str, str] = {
     'ENQUEUED': 'Enqueued',
     'PROCESSING': 'Processing',
     'COMPLETED': 'Completed',
     'FAILED': 'Failed',
 }
 
-DETECTION_CATEGORIES = {
+DETECTION_CATEGORIES: Dict[str, str] = {
     '1': 'Animal',
     '2': 'Person',
     '3': 'Vehicle',
 }
+
+StatusChoice = Literal['ENQUEUED', 'PROCESSING', 'COMPLETED', 'FAILED']
+CategoryChoice = Literal['1', '2', '3']
 
 
 class Video(models.Model):
@@ -43,12 +47,14 @@ class VideoChunk(models.Model):
         return f'VideoChunk - {self.name} from Video {self.video.id}'
 
 
-def frame_upload_path(instance, filename):
+def frame_upload_path(instance: 'Frame', filename: str) -> str:
+    """Generate upload path for frame images."""
     video_name = os.path.splitext(instance.video_chunk.video_file.name)[0]
     return f'{video_name}/frame{instance.frame_number:07d}.jpg'
 
 
-def detection_upload_path(instance, filename):
+def detection_upload_path(instance: 'Frame', filename: str) -> str:
+    """Generate upload path for detection result images."""
     video_name = os.path.splitext(instance.video_chunk.video_file.name)[0]
     return f'{video_name}/detections/frame{instance.frame_number:07d}.jpg'
 
