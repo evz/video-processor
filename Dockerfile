@@ -26,7 +26,6 @@ ENV NVIDIA_DRIVER_CAPABILITIES=all
 COPY requirements.txt /code/
 RUN python3 -m pip config set global.break-system-packages true
 RUN pip install -r requirements.txt
-RUN pip install --upgrade torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 
 # Copy application files last (invalidated when code changes, but deps stay cached)
 COPY docker-entrypoint.sh /code/

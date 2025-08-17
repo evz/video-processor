@@ -109,14 +109,10 @@ endif
 	docker compose -f docker-compose-local.yaml up -d db redis
 	@echo "Waiting for database to be ready..."
 	@sleep 5
-	@echo "Creating any needed migrations..."
-	docker compose -f docker-compose-local.yaml run --rm admin python manage.py makemigrations
-	@echo "Running database migrations..."
-	docker compose -f docker-compose-local.yaml run --rm admin python manage.py migrate
 	@echo "Processing video synchronously..."
 	docker compose -f docker-compose-local.yaml run --rm \
-		-v "$(PWD)/$(DEMO_VIDEO):/input/video.mp4:ro" \
-		admin python manage.py process_video /input/video.mp4
+		-v "$(PWD)/$(DEMO_VIDEO):/input/$(notdir $(DEMO_VIDEO)):ro" \
+		chunk_video python3 manage.py process_video /input/$(notdir $(DEMO_VIDEO))
 	@echo ""
 	@echo "🌐 You can also start the web interface to view results:"
 	@echo "   make start-web"
@@ -143,6 +139,6 @@ migrate: setup-env ## Create and run database migrations
 	@echo "🔄 Creating any needed migrations..."
 	docker compose -f docker-compose-local.yaml up -d db
 	@sleep 3
-	docker compose -f docker-compose-local.yaml run --rm admin python manage.py makemigrations
+	docker compose -f docker-compose-local.yaml run --rm admin python3 manage.py makemigrations
 	@echo "🔄 Running database migrations..."
-	docker compose -f docker-compose-local.yaml run --rm admin python manage.py migrate
+	docker compose -f docker-compose-local.yaml run --rm admin python3 manage.py migrate
