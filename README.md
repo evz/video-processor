@@ -1,4 +1,10 @@
-# Find animals in your security camera footage using Megadetector
+# AI-Powered Video Processing System
+
+[![CI](https://github.com/evanzanten/video-processor/workflows/CI/badge.svg)](https://github.com/evanzanten/video-processor/actions)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Find animals in your security camera footage using MegaDetector
 
 I live in an area of the United States where I have a lot of random wildlife
 wandering through my backyard. At the end of 2022, I put up security cameras so
@@ -13,22 +19,103 @@ repo is: me leveraging what I know about running distributed computer programs
 with a nifty AI model that I can use to find animals in my backyard video
 cameras.
 
+## 🚀 Quick Demo
+
+**Want to try it out? Just need Docker!**
+
+```bash
+# 1. Clone the repository  
+git clone https://github.com/evanzanten/video-processor.git
+cd video-processor
+
+# 2. Run with your own video
+make demo DEMO_VIDEO=path/to/your/video.mp4
+
+# 3. Watch your processed video!
+# The command will show you exactly how to open the result
+```
+
+**Alternative: Use sample videos directory**
+```bash
+mkdir sample-videos
+# Add your MP4 files to sample-videos/
+make demo  # Automatically uses the first MP4 found in sample-videos/
+```
+
+**System Requirements:**
+- **Docker** (only requirement!)
+- **Optional**: Nvidia GPU + Container Toolkit for faster processing
+- **Auto-detects**: Uses GPU acceleration if available, falls back to CPU
+
+The demo runs the complete pipeline synchronously in a single container - no complex setup needed!
+
+## 🛠️ Available Commands
+
+```bash
+# Demo and development
+make demo                    # Run demo with first video in sample-videos/
+make demo DEMO_VIDEO=path/to/video.mp4  # Use specific video
+make demo FORCE_CPU=true     # Force CPU-only mode
+
+# System info
+make check-system           # Show detected GPU/Docker capabilities
+
+# Building
+make build                  # Build appropriate image (GPU or CPU)
+make build-gpu             # Build GPU-optimized image
+make build-cpu             # Build CPU-only image
+
+# Running services
+make start-web             # Start Django admin interface
+make start-workers         # Start processing workers
+make start-full           # Start complete distributed system
+
+# Utilities
+make clean                 # Stop containers and cleanup
+make migrate              # Run database migrations
+make help                 # Show all available commands
+```
+
+## 🎯 What This Project Demonstrates
+
+- **Distributed Systems**: Celery-based processing pipeline with multiple worker types
+- **AI/ML Integration**: MegaDetector v5a for object detection  
+- **GPU Computing**: CUDA acceleration for video processing
+- **Cloud Architecture**: AWS deployment with S3 storage and SQS messaging
+- **Containerization**: Docker setup for local and distributed deployment
+- **Video Processing**: FFmpeg integration for chunking and frame extraction
+
+## 🏗️ Processing Pipeline
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Video Upload  │───▶│  Chunk Video    │───▶│ Extract Frames  │
+│   (Django Web)  │    │  (30s segments) │    │   (FFmpeg)      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                        │
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│ Generate Output │◀───│  AI Detection   │◀───│   Queue Frames  │
+│   (Final Video) │    │ (MegaDetector)  │    │   (Parallel)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
 As of the summer of 2024, I'm still trying to figure out how to speed it up
 without spending thousands on GPU instances on AWS (or a suped up desktop or
 something) and, honestly, I think I've reached the limits of what my laptop
 equipped with an Nvidia RTX 2070 can do. To process around 90 minutes of video
-is currently taking me about 3.25 hours on my laptop. **However** ... remember
-how I said I started with what I know about running distributed computer
-programs? Well, I put together a Dockerfile and docker-compose.yaml that one
-_could_ use to run this across several GPU equipped EC2 instances or something.
-Note that this probably requires a trust fund or some other means by which you
-can finance this without impacting your ability to pay rent. I processed
-exactly _one_ approximately 90 minute long video on a `g5.xlarge` instance and
-my laptop and it took ... about 90 munutes. Which I guess means I could have
-just sat there and watched it myself. :shrug: You can use that information
-however you want to. I'll get into the nitty gritty of how to set this project
-up to run that way further down in the README but first let's talk about what
-it takes to run it in the first place.
+is currently taking me about 3.25 hours on my laptop. **However** ... I
+recently got the chance to test this on an Alienware Area 51 with the new RTX
+5090 and saw about 10x performance improvement! So there's definitely room for
+speed gains with better hardware. I also put together a Dockerfile and
+docker-compose.yaml that one _could_ use to run this across several GPU
+equipped EC2 instances or something.  Note that this probably requires a trust
+fund or some other means by which you can finance this without impacting your
+ability to pay rent. I processed exactly _one_ approximately 90 minute long
+video on a `g5.xlarge` instance and my laptop and it took ... about 90 minutes.
+Which I guess means I could have just sat there and watched it myself. :shrug:
+You can use that information however you want to. I'll get into the nitty
+gritty of how to set this project up to run that way further down in the README
+but first let's talk about what it takes to run it in the first place.
 
 ### Prerequisites
 
@@ -334,6 +421,21 @@ that's where this project currently sits: a faster but imperfect solution.
 Which doesn't quite feel right to me. Hopefully I'll get some more time to
 work on this before I run out of room to store all my security camera videos.
 All I want is to stare at cute little animals in my backyard!
+
+## 📈 Performance & Scale
+
+- **RTX 2070**: ~3.25 hours for 90 minutes of video
+- **RTX 5090** (Alienware Area 51): ~10x performance improvement over RTX 2070
+- **Cloud Scaling**: Tested on AWS g5.xlarge instances 
+- **Storage Requirements**: ~180GB for 90 minutes of video at 20fps
+- **Architecture**: Fully containerized with Docker, scalable across multiple GPU instances
+
+## 🛠️ Technologies
+
+**Core Stack**: Django, Celery, PostgreSQL, Redis/SQS  
+**AI/ML**: MegaDetector v5a, OpenCV, PIL  
+**Infrastructure**: Docker, CUDA, FFmpeg, nginx  
+**Cloud**: AWS (EC2, S3, SQS)
 
 ### A coyote walking through my backyard in the middle of the night
 

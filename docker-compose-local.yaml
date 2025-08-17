@@ -1,44 +1,26 @@
 services:
   admin:
-    image: ${DOCKER_IMAGE}
+    image: ${DOCKER_IMAGE:-video-processor:latest}
     volumes:
       - .:/code
-      - ${STORAGE_MOUNT}:/output
+      - ${STORAGE_MOUNT:-.}:/output
+    env_file:
+      - .env
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DB_PORT: ${DB_PORT}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
-      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
     ports:
       - "8000:8000"
   
   chunk_video:
-    image: ${DOCKER_IMAGE}
+    image: ${DOCKER_IMAGE:-video-processor:latest}
     volumes:
       - .:/code
-      - ${STORAGE_MOUNT}:/output
+      - ${STORAGE_MOUNT:-.}:/output
+    env_file:
+      - .env
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DB_PORT: ${DB_PORT}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
-      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'chunk_video', '--concurrency', '1']
     deploy:
       replicas: 1
@@ -50,23 +32,14 @@ services:
               capabilities: [gpu]
   
   extract:
-    image: ${DOCKER_IMAGE}
+    image: ${DOCKER_IMAGE:-video-processor:latest}
     volumes:
       - .:/code
-      - ${STORAGE_MOUNT}:/output
+      - ${STORAGE_MOUNT:-.}:/output
+    env_file:
+      - .env
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DB_PORT: ${DB_PORT}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
-      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1', '--pool', 'solo']
     deploy:
       replicas: ${EXTRACT_WORKERS_PER_HOST}
@@ -78,23 +51,14 @@ services:
               capabilities: [gpu]
   
   detect:
-    image: ${DOCKER_IMAGE}
+    image: ${DOCKER_IMAGE:-video-processor:latest}
     volumes:
       - .:/code
-      - ${STORAGE_MOUNT}:/output
+      - ${STORAGE_MOUNT:-.}:/output
+    env_file:
+      - .env
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DB_PORT: ${DB_PORT}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
-      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-l', 'ERROR', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
     deploy:
       replicas: ${DETECT_WORKERS_PER_HOST}
@@ -106,23 +70,14 @@ services:
               capabilities: [gpu]
   
   create_output:
-    image: ${DOCKER_IMAGE}
+    image: ${DOCKER_IMAGE:-video-processor:latest}
     volumes:
       - .:/code
-      - ${STORAGE_MOUNT}:/output
+      - ${STORAGE_MOUNT:-.}:/output
+    env_file:
+      - .env
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASS}
-      DB_PORT: ${DB_PORT}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      REDIS_HOST: ${REDIS_HOST}
       STORAGE_MOUNT: /output
-      CLEANUP_AFTER_PROCESSING: ${CLEANUP_AFTER_PROCESSING}
     command: ['celery', '-A', 'video_processor', 'worker', '-B', '-l', 'INFO', '-Q', 'create_output', '--concurrency', '1']
     deploy:
       replicas: 1
@@ -139,15 +94,17 @@ services:
     
   db:
     image: 'postgres:15'
+    env_file:
+      - .env
     environment:
-      POSTGRES_PASSWORD: ${DB_PASS}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_PASSWORD: ${DB_PASS:-processor-password}
+      POSTGRES_USER: ${DB_USER:-processor}
+      POSTGRES_DB: ${DB_NAME:-processor}
     volumes:
       - postgresql:/var/lib/postgresql
       - postgresql_data:/var/lib/postgresql/data
     ports:
-      - "${DB_PORT}:${DB_PORT}"
+      - "${DB_PORT:-5432}:${DB_PORT:-5432}"
   
   redis:
     image: 'redis:latest'

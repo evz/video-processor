@@ -6,11 +6,12 @@ import json
 import time
 import itertools
 import shutil
+import glob
 
 from io import BytesIO
 from pathlib import Path
 from threading import Thread, Event
-from typing import List, Dict, Optional, Union, TypedDict
+from typing import List, Dict, Optional, Union, TypedDict, Tuple
 
 import numpy
 from PIL import Image
@@ -133,37 +134,87 @@ def chunk_video(self, video_id: int) -> None:
     video.frame_rate = frame_rate
     video.save()
 
-    monitor_thread = MonitorThread(args=[output_dir])
-    monitor_thread.start()
+    if not settings.USE_SYNCHRONOUS_PROCESSING:
+        monitor_thread = MonitorThread(args=[output_dir])
+        monitor_thread.start()
     
-    subprocess.run([
-        'ffmpeg',
-        '-hwaccel',
-        'cuda',
-        '-hwaccel_output_format',
-        'cuda',
-        '-i', 
-        f'{input_filename}',
-        '-init_hw_device',
-        'cuda',
-        '-vf',
-        'scale_cuda=w=1920:h=1080',
-        '-c:v',
-        'h264_nvenc',
-        '-an',
-        '-f',
-        'segment',
-        '-segment_time',
-        '00:00:30',
-        '-reset_timestamps',
-        '1',
-        '-map',
-        '0',
-        f'{output_dir}/{video_basename}%03d.mp4'
-    ], check=True)
+    if settings.USE_CPU_ONLY:
+        # CPU-only FFmpeg command
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-i', 
+            f'{input_filename}',
+            '-vf',
+            'scale=w=1920:h=1080',
+            '-c:v',
+            'libx264',
+            '-an',
+            '-f',
+            'segment',
+            '-segment_time',
+            '00:00:30',
+            '-reset_timestamps',
+            '1',
+            '-map',
+            '0',
+            f'{output_dir}/{video_basename}%03d.mp4'
+        ]
+    else:
+        # GPU-accelerated FFmpeg command
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-hwaccel',
+            'cuda',
+            '-hwaccel_output_format',
+            'cuda',
+            '-i', 
+            f'{input_filename}',
+            '-init_hw_device',
+            'cuda',
+            '-vf',
+            'scale_cuda=w=1920:h=1080',
+            '-c:v',
+            'h264_nvenc',
+            '-an',
+            '-f',
+            'segment',
+            '-segment_time',
+            '00:00:30',
+            '-reset_timestamps',
+            '1',
+            '-map',
+            '0',
+            f'{output_dir}/{video_basename}%03d.mp4'
+        ]
     
-    monitor_thread.stop()
-    monitor_thread.join()
+    subprocess.run(ffmpeg_cmd, check=True)
+    
+    if settings.USE_SYNCHRONOUS_PROCESSING:
+        # Process chunks synchronously - find all created chunk files
+        chunk_files = sorted(glob.glob(f'{output_dir}/{video_basename}*.mp4'))
+        for i, chunk_file in enumerate(chunk_files):
+            # Create VideoChunk record
+            filename = os.path.basename(chunk_file)
+            sequence_number = i  # Use index as sequence number
+            
+            with open(chunk_file, 'rb') as f:
+                video_chunk = VideoChunk(name=filename,
+                                       video=video,
+                                       video_file=File(f, filename),
+                                       sequence_number=sequence_number)
+                video_chunk.save()
+            
+            # Process frames synchronously
+            extract_frames(video_chunk.id)
+            
+            # Clean up chunk file
+            os.remove(chunk_file)
+        
+        # Check if video is complete and trigger final processing
+        find_completed_videos()
+    else:
+        monitor_thread.stop()
+        monitor_thread.join()
     
     os.remove(input_filename)
 
@@ -223,8 +274,13 @@ def extract_frames(self, video_chunk_id: int) -> None:
         f'{output_dir}/frame-%07d.jpg'
     ], check=True)
 
-    for frame_number in range(start_frame_number, (start_frame_number + frame_count)):	
+    # Count actual frames extracted for this chunk instead of assuming frame_count
+    frame_number = start_frame_number
+    while True:
         frame_path = os.path.join(output_dir, f'frame-{frame_number:07d}.jpg')
+        if not os.path.exists(frame_path):
+            break
+            
         with open(frame_path, 'rb') as image:
             frame = Frame(video_chunk=video_chunk,
                           frame_file=File(image, f'frame{frame_number:07d}.jpg'),
@@ -232,7 +288,12 @@ def extract_frames(self, video_chunk_id: int) -> None:
                           frame_number=frame_number,
                           status='ENQUEUED')
             frame.save()
-        detect.delay(frame.id) 
+        
+        if settings.USE_SYNCHRONOUS_PROCESSING:
+            detect(frame.id)
+        else:
+            detect.delay(frame.id)
+        frame_number += 1 
 
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
@@ -329,7 +390,10 @@ def find_completed_videos() -> None:
                 video.status = 'COMPLETED'
                 video.save()
                 
-                draw_detections.delay(video.id)
+                if settings.USE_SYNCHRONOUS_PROCESSING:
+                    draw_detections(video.id)
+                else:
+                    draw_detections.delay(video.id)
 
 
 @celery_app.task(bind=True, max_retries=None)
@@ -370,7 +434,10 @@ def draw_detections(self, video_id):
         except OSError as e:
             self.retry(exc=e, countdown=60)
 
-    make_detection_video.delay(video_id)
+    if settings.USE_SYNCHRONOUS_PROCESSING:
+        make_detection_video(video_id)
+    else:
+        make_detection_video.delay(video_id)
 
 
 @celery_app.task(bind=True, max_retries=None)
@@ -387,6 +454,10 @@ def make_detection_video(self, video_id):
                           .exclude(detections_file='')\
                           .order_by('frame_number')
     
+    if not frames.exists():
+        logger.info(f'No detections found for video {video_id}. Skipping output video creation.')
+        return
+    
     for index, frame in enumerate(frames):
 
         try:
@@ -398,18 +469,34 @@ def make_detection_video(self, video_id):
             frame.detections_file.close()
 
 
-    subprocess.run([
-        'ffmpeg',
-        '-hwaccel',
-        'cuda',
-        '-framerate',
-        f'{video.frame_rate}',
-        '-i',
-        f'{output_dir}/detection%07d.jpg',
-        '-c:v',
-        'h264_nvenc',
-        f'{output_dir}/{video_basename}-detections.mp4',
-    ])
+    if settings.USE_CPU_ONLY:
+        # CPU-only FFmpeg command
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-framerate',
+            f'{video.frame_rate}',
+            '-i',
+            f'{output_dir}/detection%07d.jpg',
+            '-c:v',
+            'libx264',
+            f'{output_dir}/{video_basename}-detections.mp4',
+        ]
+    else:
+        # GPU-accelerated FFmpeg command
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-hwaccel',
+            'cuda',
+            '-framerate',
+            f'{video.frame_rate}',
+            '-i',
+            f'{output_dir}/detection%07d.jpg',
+            '-c:v',
+            'h264_nvenc',
+            f'{output_dir}/{video_basename}-detections.mp4',
+        ]
+    
+    subprocess.run(ffmpeg_cmd)
 
     with open(f'{output_dir}/{video_basename}-detections.mp4', 'rb') as f:
         video.detections_file = File(f, f'{video_basename}-detections.mp4')

@@ -106,6 +106,16 @@ if os.getenv('CLEANUP_AFTER_PROCESSING') == 'yes':
 else:
     CLEANUP_AFTER_PROCESSING = False
 
+if os.getenv('USE_CPU_ONLY') == 'true':
+    USE_CPU_ONLY = True
+else:
+    USE_CPU_ONLY = False
+
+if os.getenv('USE_SYNCHRONOUS_PROCESSING') == 'true':
+    USE_SYNCHRONOUS_PROCESSING = True
+else:
+    USE_SYNCHRONOUS_PROCESSING = False
+
 if os.getenv('AWS_ACCESS_KEY_ID'):
     FRAMES_BUCKET = os.getenv('FRAMES_BUCKET')
     VIDEOS_BUCKET = os.getenv('VIDEOS_BUCKET')
