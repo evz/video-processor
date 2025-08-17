@@ -76,6 +76,39 @@ make migrate              # Run database migrations
 make help                 # Show all available commands
 ```
 
+## ⚙️ Environment Variables
+
+The demo automatically creates a `.env` file with sensible defaults, but you can customize these variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOCKER_IMAGE` | `video-processor:latest` | Docker image name for GPU processing |
+| `USE_CPU_ONLY` | `true` (local), `false` (AWS) | Use CPU-only processing (no GPU required) |
+| `USE_SYNCHRONOUS_PROCESSING` | `true` (local), `false` (AWS) | Run all tasks synchronously in demo mode |
+| `CLEANUP_AFTER_PROCESSING` | `no` (local), `yes` (AWS) | Delete intermediate files after processing |
+| `DJANGO_SECRET_KEY` | `foobar-please-change-me` | Django secret key (change for production) |
+| `DJANGO_SUPERUSER_USERNAME` | `foo` | Django admin username |
+| `DJANGO_SUPERUSER_PASSWORD` | `foobar` | Django admin password |
+| `DJANGO_SUPERUSER_EMAIL` | `test@test.com` | Django admin email |
+| `DB_HOST` | `db` | Database hostname |
+| `DB_NAME` | `processor` | Database name |
+| `DB_USER` | `processor` | Database username |
+| `DB_PASSWORD` | `processor-password` | Database password |
+| `DB_PORT` | `5432` | Database port |
+| `REDIS_HOST` | `redis` | Redis hostname for Celery broker |
+| `STORAGE_MOUNT` | `.` (local), `/storage` (AWS) | Host directory to mount for file storage |
+| `EXTRACT_WORKERS_PER_HOST` | `1` | Number of frame extraction workers |
+| `DETECT_WORKERS_PER_HOST` | `1` | Number of AI detection workers |
+
+**AWS-specific variables** (for distributed setup):
+| Variable | Description |
+|----------|-------------|
+| `AWS_ACCESS_KEY_ID` | AWS access key for S3/SQS |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
+| `AWS_REGION` | AWS region (e.g., `us-east-2`) |
+| `FRAMES_BUCKET` | S3 bucket for storing frame images |
+| `VIDEOS_BUCKET` | S3 bucket for storing video files |
+
 ## 🎯 What This Project Demonstrates
 
 - **Distributed Systems**: Celery-based processing pipeline with multiple worker types
