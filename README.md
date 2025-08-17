@@ -199,7 +199,9 @@ So, to summarize for the people who are just skimming, the prerequisites are:
 
 ### How do I make it go?
 
-The simplest way to run this is with the demo command (see Quick Demo section above), which handles everything automatically. For the full distributed system with Celery workers, you'll need a GPU setup:
+The simplest way to run this is with the demo command (see Quick Demo section
+above), which handles everything automatically. For the full distributed system
+with Celery workers, you'll need a GPU setup:
 
 * Build the GPU docker image (see "Docker build process" below)
 * Make a copy of the example local env file and make changes as needed
@@ -379,7 +381,12 @@ AWS that kind of money (yet). You'll see these stages reflected in the [celery
 tasks](processor/tasks.py) and in the names of the services in the
 `docker-compose` files. These stages look like this:
 
-**Break the video into chunks** To handle large video files efficiently and enable parallel processing, `ffmpeg` breaks long videos into 30-second chunks. This approach prevents memory issues with very large files and allows the system to start processing frames from early chunks while later chunks are still being created. FFmpeg can use GPU acceleration to speed up this chunking process when available. 
+**Break the video into chunks** To handle large video files efficiently and
+enable parallel processing, `ffmpeg` breaks long videos into 30-second chunks.
+This approach prevents memory issues with very large files and allows the
+system to start processing frames from early chunks while later chunks are
+still being created. FFmpeg can use GPU acceleration to speed up this chunking
+process when available. 
 
 **Extract frames from the video chunks** As I'm sure you've guessed, this
 iterates through the chunks of the video and saves out each frame as a separate
