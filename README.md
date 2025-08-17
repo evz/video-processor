@@ -1,6 +1,6 @@
 # AI-Powered Video Processing System
 
-[![CI](https://github.com/evanzanten/video-processor/workflows/CI/badge.svg)](https://github.com/evanzanten/video-processor/actions)
+[![CI](https://github.com/evz/video-processor/workflows/CI/badge.svg)](https://github.com/evz/video-processor/actions)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -25,7 +25,7 @@ cameras.
 
 ```bash
 # 1. Clone the repository  
-git clone https://github.com/evanzanten/video-processor.git
+git clone https://github.com/evz/video-processor.git
 cd video-processor
 
 # 2. Run with your own video
