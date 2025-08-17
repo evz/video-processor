@@ -1,7 +1,6 @@
 # AI-Powered Video Processing System
 
-[![CI](https://github.com/evz/video-processor/workflows/CI/badge.svg)](https://github.com/evz/video-processor/actions)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Find animals in your security camera footage using MegaDetector
@@ -86,7 +85,7 @@ The demo automatically creates a `.env` file with sensible defaults, but you can
 | `USE_CPU_ONLY` | `true` (local), `false` (AWS) | Use CPU-only processing (no GPU required) |
 | `USE_SYNCHRONOUS_PROCESSING` | `true` (local), `false` (AWS) | Run all tasks synchronously in demo mode |
 | `CLEANUP_AFTER_PROCESSING` | `no` (local), `yes` (AWS) | Delete intermediate files after processing |
-| `DJANGO_SECRET_KEY` | `foobar-please-change-me` | Django secret key (change for production) |
+| `DJANGO_SECRET_KEY` | `foobar-please-change-me` | Django secret key |
 | `DJANGO_SUPERUSER_USERNAME` | `foo` | Django admin username |
 | `DJANGO_SUPERUSER_PASSWORD` | `foobar` | Django admin password |
 | `DJANGO_SUPERUSER_EMAIL` | `test@test.com` | Django admin email |
@@ -152,7 +151,7 @@ but first let's talk about what it takes to run it in the first place.
 
 ### Prerequisites
 
-At the very least, you'll need a Nvidia GPU equipped computer to run this on.
+For optimal performance, you'll want a Nvidia GPU equipped computer, though the system can run on CPU-only for demos and testing.
 I've never attempted to run it on anything other than Ubuntu 22.04 with version
 12.5 of the Nvidia CUDA Toolkit but I think it'll probably work with older
 versions as well. Getting that setup can be a little weird but most concise
@@ -191,7 +190,8 @@ and just leverages whatever GPU you have on your host.
 
 So, to summarize for the people who are just skimming, the prerequisites are:
 
-* Nvidia GPU
+* **For trying it out**: Just Docker (auto-detects GPU vs CPU)
+* **For reasonable performance**: Nvidia GPU
 * Debian-ish Linux distro (tested on Ubuntu 22.04)
 * [Nvidia CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (tested with 12.5 but older versions will probably work)
 * A lot of disk space on a fast disk (optional but, like, definitely worth it)
@@ -199,13 +199,9 @@ So, to summarize for the people who are just skimming, the prerequisites are:
 
 ### How do I make it go?
 
-The simplest way to run this is just on your local machine using the
-`docker-compose-local.yaml` file with the `.env.local` file to populate the env
-vars. To run it in a more distributed way, see the section on running it in a
-more distributed way below. To get a basic running version up, here's the
-tl;dr:
+The simplest way to run this is with the demo command (see Quick Demo section above), which handles everything automatically. For the full distributed system with Celery workers, you'll need a GPU setup:
 
-* Build the docker image (see "Docker build process" below)
+* Build the GPU docker image (see "Docker build process" below)
 * Make a copy of the example local env file and make changes as needed
   (probably the only thing you'll want to think about changing is the
   `STORAGE_MOUNT` but, it should just work as is)
@@ -354,30 +350,25 @@ of the video in the Django admin.
 ![](detail-view.png)
 
 ### Docker build process
-This project relies upon [`decord`](https://github.com/dmlc/decord) to quickly
-extract frames from your video files. In order to enable GPU acceleration for
-that library, you need to install it from source. The Dockerfile included here
-will take care of that for you however, you need to download the Nvidia Video
-Codec SDK and stick it into the decord folder before you build the docker
-image. Why can't the Dockerfile just take care of that for you? Because Nvidia
-wants your email address. Anyways, it's pretty simple:
 
-* Recursively clone the decord repo:
+The system automatically builds the appropriate Docker image (CPU or GPU) based on your hardware. For manual building:
+
+**CPU-only image** (works anywhere):
 ```
-git clone --recursive https://github.com/dmlc/decord
-```
-* Go to the [Nvidia Video Codec SDK download
-  page](https://developer.nvidia.com/nvidia-video-codec-sdk/download) and
-  download the "Video Codec for application developers". It will involve
-  registering with Nvidia (Boo!)
-* Copy the zip file you end up with to the directory where you cloned the decord repo
-* Unzip it
-* Build the docker image for this project:
-```
-docker build -t video-processor:latest .
+make build-cpu
 ```
 
-The build will probably take around 5-10 minutes and use around 10GB of disk.
+**GPU-accelerated image** (requires Nvidia Container Toolkit):
+```
+make build-gpu
+```
+
+Or let the system auto-detect:
+```
+make build
+```
+
+The build will probably take around 5-10 minutes and use around 6GB (CPU) or 10GB+ (GPU) of disk.
 
 ### How this project is stitched together
 
@@ -388,16 +379,7 @@ AWS that kind of money (yet). You'll see these stages reflected in the [celery
 tasks](processor/tasks.py) and in the names of the services in the
 `docker-compose` files. These stages look like this:
 
-**Break the video into chunks** I found that the `decord` library was great but
-it choked if I tried to give it video files that were more than a few minutes
-long. Luckily, `ffmpeg` can use your GPU to speed up the process of taking one
-long video and making it into a bunch of shorter videos, which is what is
-happening under the hood here. As one "chunk" of the video is completed, the
-next step in the pipeline (extracting frames from the video) gets kicked off
-for that chunk. This makes it possible to parallelize the extraction process
-in a way that decord can keep the detection queue filled (and not run out of
-memory which was the case when I was attempting to grab batches of frames from
-one, very long, video). 
+**Break the video into chunks** To handle large video files efficiently and enable parallel processing, `ffmpeg` breaks long videos into 30-second chunks. This approach prevents memory issues with very large files and allows the system to start processing frames from early chunks while later chunks are still being created. FFmpeg can use GPU acceleration to speed up this chunking process when available. 
 
 **Extract frames from the video chunks** As I'm sure you've guessed, this
 iterates through the chunks of the video and saves out each frame as a separate
@@ -444,21 +426,22 @@ chunk but the problem then became the fact that, as the processing got farther
 and farther into the video, `ffmpeg` would have to scan the video farther and
 farther which was just a non-starter for very large videos. 
 
-I then found `decord` which definitely does things a whole lot faster but has
-the same limitations as OpenCV (since under the hood it seems to be using quite
-a lot of the same primitives). I was able to get around the limitation that
-`decord` seems to have regarding very large videos (aka, it chokes on them) by
-breaking large videos into smaller chunks but it still kinda sucks that I can't
-seem to be able to actually extract all of the frames from my videos. So,
-that's where this project currently sits: a faster but imperfect solution.
-Which doesn't quite feel right to me. Hopefully I'll get some more time to
-work on this before I run out of room to store all my security camera videos.
-All I want is to stare at cute little animals in my backyard!
+The current approach uses `ffmpeg` throughout the pipeline, which is more
+reliable with different video codecs and metadata issues. By breaking videos
+into 30-second chunks and using `ffmpeg` for both chunking and frame
+extraction, the system handles problematic video files much better than
+previous attempts with OpenCV or other libraries. This approach isn't perfect
+but it's much more robust for the variety of security camera footage I
+encounter. All I want is to stare at cute little animals in my backyard!
 
 ## 📈 Performance & Scale
 
-- **RTX 2070**: ~3.25 hours for 90 minutes of video
-- **RTX 5090** (Alienware Area 51): ~10x performance improvement over RTX 2070
+**AI Detection Performance:**
+- **Intel Core i7-12700 (CPU)**: ~0.5 images/second (MegaDetector docs)
+- **RTX 2070 (GPU)**: ~3.25 hours for 90 minutes of video
+- **RTX 5090 (GPU)**: ~10x performance improvement over RTX 2070
+
+**System Scaling:**
 - **Cloud Scaling**: Tested on AWS g5.xlarge instances 
 - **Storage Requirements**: ~180GB for 90 minutes of video at 20fps
 - **Architecture**: Fully containerized with Docker, scalable across multiple GPU instances
@@ -466,8 +449,9 @@ All I want is to stare at cute little animals in my backyard!
 ## 🛠️ Technologies
 
 **Core Stack**: Django, Celery, PostgreSQL, Redis/SQS  
-**AI/ML**: MegaDetector v5a, OpenCV, PIL  
-**Infrastructure**: Docker, CUDA, FFmpeg, nginx  
+**AI/ML**: MegaDetector v5a, PIL  
+**Video Processing**: FFmpeg (CPU and GPU-accelerated)  
+**Infrastructure**: Docker, CUDA (optional)  
 **Cloud**: AWS (EC2, S3, SQS)
 
 ### A coyote walking through my backyard in the middle of the night
