@@ -353,14 +353,29 @@ of the video in the Django admin.
 
 ### Docker build process
 
+**IMPORTANT: GPU Build Requirement**
+
+Before building the GPU image, you need the NVIDIA Video Codec SDK:
+
+1. Visit https://developer.nvidia.com/video-codec-sdk/download
+2. Download the **Video Codec SDK** (requires free NVIDIA Developer account)
+   - **Tested versions**: 13.0.37
+   - Newer versions will likely work but haven't been tested
+3. Place the `Video_Codec_SDK_*.zip` file in the root of this project directory
+   - The build process will automatically detect and use whichever version you download
+
+This SDK provides the libraries needed for GPU-accelerated video decoding with decord.
+
+**Building the images:**
+
 The system automatically builds the appropriate Docker image (CPU or GPU) based on your hardware. For manual building:
 
-**CPU-only image** (works anywhere):
+**CPU-only image** (works anywhere, no SDK needed):
 ```
 make build-cpu
 ```
 
-**GPU-accelerated image** (requires Nvidia Container Toolkit):
+**GPU-accelerated image** (requires Nvidia Container Toolkit + Video Codec SDK):
 ```
 make build-gpu
 ```

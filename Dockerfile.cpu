@@ -5,6 +5,12 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     libpq-dev \
     gcc \
+    git \
+    cmake \
+    libavcodec-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavutil-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir /code
@@ -12,10 +18,28 @@ WORKDIR /code
 
 # Copy and install Python dependencies first (cached unless requirements.txt changes)
 COPY requirements.txt /code/
-RUN pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Install CPU-only PyTorch
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Build and install decord from fork (CPU-only)
+RUN git clone --recursive https://github.com/evz/decord /tmp/decord && \
+    cd /tmp/decord && \
+    mkdir build && \
+    cd build && \
+    cmake .. -DUSE_CUDA=0 -DCMAKE_BUILD_TYPE=Release && \
+    make && \
+    cd /tmp/decord/python && \
+    python3 setup.py install && \
+    rm -rf /tmp/decord
+
+# Copy MegaDetector model to avoid re-downloading on every container start
+COPY models/md_v5a.0.0.pt /models/md_v5a.0.0.pt
+
+ENV MDV5A=/models/md_v5a.0.0.pt
 
 # Copy application files last (invalidated when code changes, but deps stay cached)
 COPY docker-entrypoint.sh /code/

@@ -48,8 +48,9 @@ class VideoAdmin(admin.ModelAdmin):
         return self.format_date(obj.updated)
     
     def progress(self, obj):
-        completed_frames = Frame.objects.filter(video_chunk__video=obj).filter(status='COMPLETED').count()
-        return f'{completed_frames} / {obj.frame_count}'
+        extracted_frames = Frame.objects.filter(video_chunk__video=obj).count()
+        completed_frames = Frame.objects.filter(video_chunk__video=obj, status='COMPLETED').count()
+        return f'{completed_frames} / {extracted_frames} / {obj.frame_count}'
     
     def detection_video_available(self, obj):
         if obj.detections_file != '':
@@ -60,3 +61,4 @@ class VideoAdmin(admin.ModelAdmin):
 
     formatted_created.short_description = 'Created'
     formatted_updated.short_description = 'Updated'
+    progress.short_description = 'Processed / Extracted / Total'

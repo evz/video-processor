@@ -22,6 +22,7 @@ from watchdog.events import FileSystemEventHandler
 
 from django.conf import settings
 from django.core.files import File
+from celery.signals import worker_process_init
 from video_processor import celery_app
 
 from .models import Video, VideoChunk, Frame, Detection
@@ -121,12 +122,14 @@ def chunk_video(self, video_id: int) -> None:
     os.makedirs(output_dir, exist_ok=True)
     
     input_filename = os.path.join(input_video_dir, video.video_file.name)
-    
-    # Need to get the frame rate for the incoming video
-    video_cap = cv2.VideoCapture(input_filename)
-    frame_rate = video_cap.get(cv2.CAP_PROP_FPS)
-    frame_count = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_cap.release()
+
+    # Need to get the frame rate and frame count for the incoming video
+    # Use decord for accurate video metadata
+    from decord import VideoReader, cpu, gpu
+    ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
+    vr = VideoReader(input_filename, ctx=ctx)
+    frame_rate = vr.get_avg_fps()
+    frame_count = len(vr)
     
     video.status = 'PROCESSING'
     video.name = video_basename
@@ -140,14 +143,21 @@ def chunk_video(self, video_id: int) -> None:
     
     if settings.USE_CPU_ONLY:
         # CPU-only FFmpeg command
+        # Force keyframes at segment boundaries to ensure clean cuts without frame overlap
+        # Use -fps_mode passthrough to preserve original frame timing (avoids duplicating
+        # frames in variable frame rate videos)
         ffmpeg_cmd = [
             'ffmpeg',
-            '-i', 
+            '-i',
             f'{input_filename}',
             '-vf',
             'scale=w=1920:h=1080',
             '-c:v',
             'libx264',
+            '-fps_mode',
+            'passthrough',
+            '-force_key_frames',
+            'expr:gte(t,n_forced*30)',
             '-an',
             '-f',
             'segment',
@@ -161,20 +171,22 @@ def chunk_video(self, video_id: int) -> None:
         ]
     else:
         # GPU-accelerated FFmpeg command
+        # Use software decoding but GPU encoding (nvenc) for reliability
+        # Force keyframes at segment boundaries to ensure clean cuts without frame overlap
+        # Use -fps_mode passthrough to preserve original frame timing (avoids duplicating
+        # frames in variable frame rate videos)
         ffmpeg_cmd = [
             'ffmpeg',
-            '-hwaccel',
-            'cuda',
-            '-hwaccel_output_format',
-            'cuda',
-            '-i', 
+            '-i',
             f'{input_filename}',
-            '-init_hw_device',
-            'cuda',
             '-vf',
-            'scale_cuda=w=1920:h=1080',
+            'scale=w=1920:h=1080',
             '-c:v',
             'h264_nvenc',
+            '-fps_mode',
+            'passthrough',
+            '-force_key_frames',
+            'expr:gte(t,n_forced*30)',
             '-an',
             '-f',
             'segment',
@@ -252,49 +264,65 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
     video_chunk.status = 'PROCESSING'
     video_chunk.save()
-    
-    # Each chunk is 30 seconds. Multiply that by the frame rate of the video and
-    # the sequence number of the video chunk to get the starting frame number
-    # for the chunk. Add one because we don't want to have the frame numbers be
-    # zero indexed.
-    frame_count = video_chunk.video.frame_rate * 30
-    start_frame_number = (video_chunk.sequence_number * frame_count) + 1
+
+    # Calculate the starting frame number from the previous chunk's end_frame.
+    # This ensures consecutive frame numbering without duplicates or gaps,
+    # regardless of how FFmpeg splits the chunks.
+    if video_chunk.sequence_number > 0:
+        previous_chunk = VideoChunk.objects.filter(
+            video=video_chunk.video,
+            sequence_number=video_chunk.sequence_number - 1
+        ).first()
+        start_frame_number = (previous_chunk.end_frame + 1) if previous_chunk and previous_chunk.end_frame else 1
+    else:
+        start_frame_number = 1
+
+    video_chunk.start_frame = start_frame_number
+
     output_frames_dir = os.path.join(settings.STORAGE_DIR, 'frames')
     video_basename = os.path.basename(video_chunk.video.video_file.name).split('.')[0]
     output_dir = os.path.join(output_frames_dir, video_basename)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    subprocess.run([
-        'ffmpeg',
-        '-i', 
-        video_chunk.video_file.path,
-        '-start_number',
-        str(start_frame_number),
-        f'{output_dir}/frame-%07d.jpg'
-    ], check=True)
+    # Use decord to extract frames instead of ffmpeg
+    # Determine device context (GPU or CPU)
+    from decord import VideoReader, cpu, gpu
+    ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
 
-    # Count actual frames extracted for this chunk instead of assuming frame_count
-    frame_number = start_frame_number
-    while True:
-        frame_path = os.path.join(output_dir, f'frame-{frame_number:07d}.jpg')
-        if not os.path.exists(frame_path):
-            break
-            
-        with open(frame_path, 'rb') as image:
-            frame = Frame(video_chunk=video_chunk,
-                          frame_file=File(image, f'frame{frame_number:07d}.jpg'),
-                          detections_file=None,
-                          frame_number=frame_number,
-                          status='ENQUEUED')
-            frame.save()
-        
+    # Open video with decord
+    vr = VideoReader(video_chunk.video_file.path, ctx=ctx)
+
+    # Extract and save each frame
+    frame_number = int(start_frame_number)
+    for frame_idx in range(len(vr)):
+        # Get frame as numpy array (RGB format)
+        frame_array = vr[frame_idx].asnumpy()
+
+        # Convert to PIL Image
+        frame_image = Image.fromarray(frame_array)
+
+        # Save frame to BytesIO buffer
+        frame_buffer = BytesIO()
+        frame_image.save(frame_buffer, format='JPEG', quality=95)
+        frame_buffer.seek(0)
+
+        # Create Frame database record
+        frame = Frame(video_chunk=video_chunk,
+                      frame_file=File(frame_buffer, f'frame{frame_number:07d}.jpg'),
+                      detections_file=None,
+                      frame_number=frame_number,
+                      status='ENQUEUED')
+        frame.save()
+
         if settings.USE_SYNCHRONOUS_PROCESSING:
             detect(frame.id)
         else:
             detect.delay(frame.id)
-        frame_number += 1 
+        frame_number += 1
 
+    # Set the end_frame to the last frame number we actually saved
+    video_chunk.end_frame = frame_number - 1
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
     
@@ -303,6 +331,18 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
 
 detector = None
+
+
+@worker_process_init.connect
+def load_model_on_startup(**kwargs):
+    """Pre-load the detection model when the worker starts."""
+    global detector
+    if detector is None:
+        from megadetector.detection.run_detector import load_detector
+        logger.info('Loading MegaDetector model at worker startup...')
+        detector = load_detector('MDV5A')
+        logger.info('MegaDetector model loaded.')
+
 
 @celery_app.task
 def detect(frame_id: int) -> None:
@@ -482,11 +522,9 @@ def make_detection_video(self, video_id):
             f'{output_dir}/{video_basename}-detections.mp4',
         ]
     else:
-        # GPU-accelerated FFmpeg command
+        # GPU-accelerated FFmpeg command (using nvenc for encoding)
         ffmpeg_cmd = [
             'ffmpeg',
-            '-hwaccel',
-            'cuda',
             '-framerate',
             f'{video.frame_rate}',
             '-i',

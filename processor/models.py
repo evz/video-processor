@@ -26,7 +26,7 @@ class Video(models.Model):
     video_file = models.FileField(storage=storages['videos'])
     detections_file = models.FileField(storage=storages['videos'], null=True)
     frame_count = models.IntegerField(null=True)
-    frame_rate = models.IntegerField(default=20)
+    frame_rate = models.FloatField(default=20.0)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
@@ -42,6 +42,8 @@ class VideoChunk(models.Model):
     created = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     sequence_number = models.IntegerField(default=1)
+    start_frame = models.IntegerField(null=True, help_text="First frame number in this chunk")
+    end_frame = models.IntegerField(null=True, help_text="Last frame number in this chunk")
 
     def __str__(self):
         return f'VideoChunk - {self.name} from Video {self.video.id}'

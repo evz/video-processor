@@ -54,19 +54,19 @@ setup-env: ## Copy example env file if .env doesn't exist
 build: ## Build the appropriate Docker image (GPU or CPU based on detection)
 ifeq ($(USE_GPU_SETUP),true)
 	@echo "Building GPU Docker image: $(DOCKER_IMAGE) (this may take several minutes)..."
-	docker build -t $(DOCKER_IMAGE) .
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_IMAGE) .
 else
 	@echo "Building CPU Docker image: $(DOCKER_IMAGE_CPU) (this may take several minutes)..."
-	docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
 endif
 
 build-gpu: ## Build the GPU Docker image
 	@echo "Building GPU Docker image: $(DOCKER_IMAGE) (this may take several minutes)..."
-	docker build -t $(DOCKER_IMAGE) .
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_IMAGE) .
 
-build-cpu: ## Build the CPU Docker image  
+build-cpu: ## Build the CPU Docker image
 	@echo "Building CPU Docker image: $(DOCKER_IMAGE_CPU) (this may take several minutes)..."
-	docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
 
 
 demo: setup-env ## Process a demo video synchronously using Django management command
@@ -96,14 +96,14 @@ ifeq ($(USE_GPU_SETUP),true)
 	@sed 's/USE_CPU_ONLY=true/USE_CPU_ONLY=false/' .env.local.example > .env
 	@echo "DOCKER_IMAGE=$(DOCKER_IMAGE)" >> .env
 	@echo "Building GPU image (this may take several minutes for MegaDetector installation)..."
-	docker build -t $(DOCKER_IMAGE) .
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_IMAGE) .
 else
 	@echo "Mode: CPU-only processing (no GPU/Nvidia Container Toolkit required)"
 	@echo "Setting up .env for CPU mode..."
 	@cp .env.local.example .env
 	@echo "DOCKER_IMAGE=$(DOCKER_IMAGE_CPU)" >> .env
 	@echo "Building CPU image (this may take several minutes for MegaDetector installation)..."
-	docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.cpu -t $(DOCKER_IMAGE_CPU) .
 endif
 	@echo "Setting up environment..."
 	docker compose -f docker-compose-local.yaml up -d db redis
@@ -130,6 +130,10 @@ start-web: setup-env ## Start the web interface only
 start-workers: setup-env ## Start all processing workers
 	@echo "⚙️  Starting processing workers..."
 	docker compose -f docker-compose-local.yaml up chunk_video extract detect create_output
+
+start-services: setup-env ## Start services
+	@echo "⚙️  Starting services..."
+	docker compose -f docker-compose-local.yaml up -d db redis
 
 start-full: setup-env ## Start complete system (web + workers + services)
 	@echo "🚀 Starting complete system..."
