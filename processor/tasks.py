@@ -7,6 +7,7 @@ import time
 import itertools
 import shutil
 import glob
+import sys
 
 from io import BytesIO
 from pathlib import Path
@@ -22,7 +23,7 @@ from watchdog.events import FileSystemEventHandler
 
 from django.conf import settings
 from django.core.files import File
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, task_failure
 from video_processor import celery_app
 
 from .models import Video, VideoChunk, Frame, Detection
@@ -40,22 +41,32 @@ class DetectionResult(TypedDict):
 class VideoChunkCompleted(FileSystemEventHandler):
     @staticmethod
     def on_closed(event):
+        from decord import VideoReader, cpu, gpu
+
         filename = os.path.basename(event.src_path)
         sequence_number = int(filename.split('.')[0][-3:])
         video_name = filename.split(".")[0][:-3]
 
         video = Video.objects.get(name=video_name)
 
+        # Probe the chunk file to get its frame count
+        ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
+        vr = VideoReader(event.src_path, ctx=ctx)
+        frame_count = len(vr)
+
         with open(event.src_path, 'rb') as f:
             video_chunk = VideoChunk(name=filename,
                                      video=video,
                                      video_file=File(f, filename),
-                                     sequence_number=sequence_number)
+                                     sequence_number=sequence_number,
+                                     frame_count=frame_count)
 
             video_chunk.save()
 
+        logger.info(f'Created chunk {sequence_number} for video {video.id} with {frame_count} frames')
+
         extract_frames.delay(video_chunk.id)
-        
+
         os.remove(event.src_path)
 
 
@@ -208,20 +219,25 @@ def chunk_video(self, video_id: int) -> None:
             # Create VideoChunk record
             filename = os.path.basename(chunk_file)
             sequence_number = i  # Use index as sequence number
-            
+
+            # Probe the chunk file to get its frame count
+            chunk_vr = VideoReader(chunk_file, ctx=ctx)
+            chunk_frame_count = len(chunk_vr)
+
             with open(chunk_file, 'rb') as f:
                 video_chunk = VideoChunk(name=filename,
                                        video=video,
                                        video_file=File(f, filename),
-                                       sequence_number=sequence_number)
+                                       sequence_number=sequence_number,
+                                       frame_count=chunk_frame_count)
                 video_chunk.save()
-            
+
             # Process frames synchronously
             extract_frames(video_chunk.id)
-            
+
             # Clean up chunk file
             os.remove(chunk_file)
-        
+
         # Check if video is complete and trigger final processing
         find_completed_videos()
     else:
@@ -235,17 +251,17 @@ def chunk_video(self, video_id: int) -> None:
 def extract_frames(self, video_chunk_id: int) -> None:
     """
     Extract individual frames from a video chunk and queue them for detection.
-    
+
     Args:
         video_chunk_id: The ID of the VideoChunk model instance to process
     """
-    
+
     # It looks like there's a chance that the message gets picked up by a
     # worker before the row gets saved to the DB, I guess. This is somewhat
     # maddening since this gets triggered by the `post_save` hook but,
     # whatever. Now you know why this retry crap is here.
     retries = 0
-    
+
     while retries <= 5:
         try:
             video_chunk = VideoChunk.objects.get(id=video_chunk_id)
@@ -258,26 +274,37 @@ def extract_frames(self, video_chunk_id: int) -> None:
             time.sleep(0.1)
 
     logger.info(f'found video {video_chunk_id}')
-    
+
+    # Calculate start_frame if not already set.
+    # This must happen before the status check so retries work correctly.
+    if video_chunk.start_frame is None:
+        if video_chunk.sequence_number > 0:
+            previous_chunk = VideoChunk.objects.filter(
+                video=video_chunk.video,
+                sequence_number=video_chunk.sequence_number - 1,
+                end_frame__isnull=False
+            ).first()
+
+            if not previous_chunk:
+                # Previous chunk hasn't finished extraction yet, retry later
+                logger.info(f'Chunk {video_chunk.sequence_number} waiting for previous chunk to complete')
+                raise self.retry(countdown=2)
+
+            start_frame_number = previous_chunk.end_frame + 1
+        else:
+            start_frame_number = 1
+
+        video_chunk.start_frame = start_frame_number
+        video_chunk.end_frame = start_frame_number + video_chunk.frame_count - 1
+        video_chunk.save()
+
+    start_frame_number = video_chunk.start_frame
+
     if video_chunk.status != 'ENQUEUED':
         return
 
     video_chunk.status = 'PROCESSING'
     video_chunk.save()
-
-    # Calculate the starting frame number from the previous chunk's end_frame.
-    # This ensures consecutive frame numbering without duplicates or gaps,
-    # regardless of how FFmpeg splits the chunks.
-    if video_chunk.sequence_number > 0:
-        previous_chunk = VideoChunk.objects.filter(
-            video=video_chunk.video,
-            sequence_number=video_chunk.sequence_number - 1
-        ).first()
-        start_frame_number = (previous_chunk.end_frame + 1) if previous_chunk and previous_chunk.end_frame else 1
-    else:
-        start_frame_number = 1
-
-    video_chunk.start_frame = start_frame_number
 
     output_frames_dir = os.path.join(settings.STORAGE_DIR, 'frames')
     video_basename = os.path.basename(video_chunk.video.video_file.name).split('.')[0]
@@ -321,8 +348,6 @@ def extract_frames(self, video_chunk_id: int) -> None:
             detect.delay(frame.id)
         frame_number += 1
 
-    # Set the end_frame to the last frame number we actually saved
-    video_chunk.end_frame = frame_number - 1
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
     
@@ -342,6 +367,20 @@ def load_model_on_startup(**kwargs):
         logger.info('Loading MegaDetector model at worker startup...')
         detector = load_detector('MDV5A')
         logger.info('MegaDetector model loaded.')
+
+
+@task_failure.connect
+def handle_task_failure(task_id, exception, traceback, **kwargs):
+    """
+    Handle task failures and exit the worker if a GPU error is detected.
+    This allows Docker to restart the container and recover from GPU issues.
+    """
+    error_msg = str(exception).lower()
+    gpu_error_keywords = ['cuda', 'gpu', 'nvenc', 'nvidia', 'device']
+
+    if any(keyword in error_msg for keyword in gpu_error_keywords):
+        logger.error(f'GPU error detected in task {task_id}, shutting down worker: {exception}')
+        sys.exit(1)
 
 
 @celery_app.task

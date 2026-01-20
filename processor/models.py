@@ -42,6 +42,7 @@ class VideoChunk(models.Model):
     created = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
     sequence_number = models.IntegerField(default=1)
+    frame_count = models.IntegerField(null=True, help_text="Number of frames in this chunk")
     start_frame = models.IntegerField(null=True, help_text="First frame number in this chunk")
     end_frame = models.IntegerField(null=True, help_text="Last frame number in this chunk")
 

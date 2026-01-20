@@ -1,6 +1,7 @@
 services:
   admin:
     image: ${DOCKER_IMAGE:-video-processor:latest}
+    restart: unless-stopped
     volumes:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
@@ -12,9 +13,10 @@ services:
     command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
     ports:
       - "8000:8000"
-  
+
   chunk_video:
     image: ${DOCKER_IMAGE:-video-processor:latest}
+    restart: unless-stopped
     volumes:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
@@ -31,9 +33,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-  
+
   extract:
     image: ${DOCKER_IMAGE:-video-processor:latest}
+    restart: unless-stopped
     volumes:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
@@ -50,9 +53,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-  
+
   detect:
     image: ${DOCKER_IMAGE:-video-processor:latest}
+    restart: unless-stopped
     volumes:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
@@ -69,9 +73,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-  
+
   create_output:
     image: ${DOCKER_IMAGE:-video-processor:latest}
+    restart: unless-stopped
     volumes:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
@@ -95,6 +100,7 @@ services:
     
   db:
     image: 'postgres:15'
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -106,9 +112,10 @@ services:
       - postgresql_data:/var/lib/postgresql/data
     ports:
       - "${DB_PORT:-5432}:${DB_PORT:-5432}"
-  
+
   redis:
     image: 'redis:latest'
+    restart: unless-stopped
     ports:
       - '6379:6379'
 
