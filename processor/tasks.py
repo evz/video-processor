@@ -103,7 +103,7 @@ class MonitorThread(Thread):
 def chunk_video(self, video_id: int) -> None:
     """
     Break a video into smaller chunks for parallel processing.
-    
+
     Args:
         video_id: The ID of the Video model instance to process
     """
@@ -112,7 +112,7 @@ def chunk_video(self, video_id: int) -> None:
     # maddening since this gets triggered by the `post_save` hook but,
     # whatever. Now you know why this retry crap is here.
     retries = 0
-    
+
     while retries <= 5:
         try:
             video = Video.objects.get(id=video_id)
@@ -123,7 +123,13 @@ def chunk_video(self, video_id: int) -> None:
                 raise e
             retries += 1
             time.sleep(0.1)
-    
+
+    # Idempotency check: skip if already has chunks (task was redelivered after partial completion)
+    existing_chunks = VideoChunk.objects.filter(video=video).count()
+    if existing_chunks > 0:
+        logger.info(f'Video {video_id} already has {existing_chunks} chunks, skipping chunk_video')
+        return
+
     input_video_dir = os.path.join(settings.STORAGE_DIR, 'videos')
     output_video_dir = os.path.join(settings.STORAGE_DIR, 'output_videos')
     video_basename = os.path.basename(video.video_file.name).split('.')[0]

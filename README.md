@@ -108,6 +108,67 @@ The demo automatically creates a `.env` file with sensible defaults, but you can
 | `FRAMES_BUCKET` | S3 bucket for storing frame images |
 | `VIDEOS_BUCKET` | S3 bucket for storing video files |
 
+## 🔧 Management Commands
+
+Django management commands for common operations. Run these inside the admin container or with `docker exec`:
+
+```bash
+docker exec video-processor-admin-1 python3 manage.py <command> [options]
+```
+
+### `process_video` - Synchronous Processing
+
+Process a single video through the complete pipeline synchronously (useful for testing/demos):
+
+```bash
+python3 manage.py process_video /path/to/video.mp4
+python3 manage.py process_video /path/to/video.mp4 --name "custom-name"
+```
+
+### `bulk_add_videos` - Batch Import
+
+Add multiple videos from a directory for processing:
+
+```bash
+# Add all videos from a directory
+python3 manage.py bulk_add_videos /path/to/videos/
+
+# Custom file pattern
+python3 manage.py bulk_add_videos /path/to/videos/ --pattern "*.mp4"
+
+# Recursive search
+python3 manage.py bulk_add_videos /path/to/videos/ --recursive
+
+# Preview what would be added
+python3 manage.py bulk_add_videos /path/to/videos/ --dry-run
+```
+
+### `reprocess_videos` - Recovery & Reprocessing
+
+Recover from stuck or failed video processing (e.g., after worker restarts):
+
+```bash
+# Fix videos that have all frames completed but are stuck in PROCESSING status
+python3 manage.py reprocess_videos --fix-completed
+
+# Requeue videos that never got chunked (stuck at first stage)
+python3 manage.py reprocess_videos --stuck-chunks
+
+# Reprocess specific video IDs
+python3 manage.py reprocess_videos --ids 6000 6001 6002
+
+# Reprocess a range of video IDs
+python3 manage.py reprocess_videos --range 6000 6064
+
+# Preview what would happen
+python3 manage.py reprocess_videos --stuck-chunks --dry-run
+```
+
+**When to use `reprocess_videos`:**
+- After restarting workers while tasks were in-flight
+- When videos are stuck in PROCESSING status
+- To retry failed video processing
+
 ## 🎯 What This Project Demonstrates
 
 - **Distributed Systems**: Celery-based processing pipeline with multiple worker types

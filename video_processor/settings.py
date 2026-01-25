@@ -200,6 +200,14 @@ CELERY_TASK_ROUTES = {
 }
 CELERY_RESULT_BACKEND = 'django-db'
 
+# Task acknowledgment settings - critical for surviving worker restarts
+# With acks_late=True, tasks are only acknowledged AFTER completion.
+# If a worker dies mid-task, the message stays in Redis and gets redelivered.
+CELERY_TASK_ACKS_LATE = True
+
+# Reject tasks when worker is shutting down so they get requeued
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+
 CELERY_BEAT_SCHEDULE = {
     'find-completed-videos': {
         'task': 'processor.tasks.find_completed_videos',
