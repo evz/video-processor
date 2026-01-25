@@ -360,13 +360,18 @@ detector = None
 
 @worker_process_init.connect
 def load_model_on_startup(**kwargs):
-    """Pre-load the detection model when the worker starts."""
-    global detector
-    if detector is None:
-        from megadetector.detection.run_detector import load_detector
-        logger.info('Loading MegaDetector model at worker startup...')
-        detector = load_detector('MDV5A')
-        logger.info('MegaDetector model loaded.')
+    """Pre-load the detection model when the worker starts, but only for detect workers."""
+    # Only load the model if this worker is handling the detect queue
+    # Check command line args for the queue name
+    if '-Q' in sys.argv:
+        queue_index = sys.argv.index('-Q') + 1
+        if queue_index < len(sys.argv) and sys.argv[queue_index] == 'detect':
+            global detector
+            if detector is None:
+                from megadetector.detection.run_detector import load_detector
+                logger.info('Loading MegaDetector model at worker startup...')
+                detector = load_detector('MDV5A')
+                logger.info('MegaDetector model loaded.')
 
 
 @task_failure.connect
