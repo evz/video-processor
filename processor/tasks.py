@@ -23,12 +23,50 @@ from watchdog.events import FileSystemEventHandler
 
 from django.conf import settings
 from django.core.files import File
-from celery.signals import worker_process_init, task_failure
+from celery.signals import worker_process_init, task_failure, task_postrun
 from video_processor import celery_app
 
 from .models import Video, VideoChunk, Frame, Detection
 
 logger = logging.getLogger(__name__)
+
+# GPU memory threshold - exit worker if usage exceeds this percentage
+GPU_MEMORY_THRESHOLD = 0.90  # 90%
+
+
+def get_gpu_memory_usage():
+    """
+    Get current GPU memory usage as a fraction (0.0 to 1.0).
+    Returns None if unable to query GPU.
+    """
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,nounits,noheader'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip().split('\n')[0]
+            used, total = map(int, line.split(','))
+            return used / total if total > 0 else None
+    except Exception as e:
+        logger.warning(f'Failed to query GPU memory: {e}')
+    return None
+
+
+def check_gpu_memory_and_exit_if_high():
+    """
+    Check GPU memory usage and exit the worker if it's too high.
+    Docker will restart the container, clearing GPU memory.
+    """
+    usage = get_gpu_memory_usage()
+    if usage is not None and usage > GPU_MEMORY_THRESHOLD:
+        logger.warning(
+            f'GPU memory usage at {usage:.1%}, exceeds threshold of {GPU_MEMORY_THRESHOLD:.0%}. '
+            f'Exiting worker to free memory.'
+        )
+        sys.exit(1)
 
 
 class DetectionResult(TypedDict):
@@ -42,6 +80,7 @@ class VideoChunkCompleted(FileSystemEventHandler):
     @staticmethod
     def on_closed(event):
         from decord import VideoReader, cpu, gpu
+        import gc
 
         filename = os.path.basename(event.src_path)
         sequence_number = int(filename.split('.')[0][-3:])
@@ -53,6 +92,10 @@ class VideoChunkCompleted(FileSystemEventHandler):
         ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
         vr = VideoReader(event.src_path, ctx=ctx)
         frame_count = len(vr)
+
+        # Explicitly release GPU memory to prevent CUDA memory leaks
+        del vr
+        gc.collect()
 
         with open(event.src_path, 'rb') as f:
             video_chunk = VideoChunk(name=filename,
@@ -143,11 +186,17 @@ def chunk_video(self, video_id: int) -> None:
     # Need to get the frame rate and frame count for the incoming video
     # Use decord for accurate video metadata
     from decord import VideoReader, cpu, gpu
+    import gc
+
     ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
     vr = VideoReader(input_filename, ctx=ctx)
     frame_rate = vr.get_avg_fps()
     frame_count = len(vr)
-    
+
+    # Explicitly release GPU memory to prevent CUDA memory leaks
+    del vr
+    gc.collect()
+
     video.status = 'PROCESSING'
     video.name = video_basename
     video.frame_count = frame_count
@@ -321,6 +370,8 @@ def extract_frames(self, video_chunk_id: int) -> None:
     # Use decord to extract frames instead of ffmpeg
     # Determine device context (GPU or CPU)
     from decord import VideoReader, cpu, gpu
+    import gc
+
     ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
 
     # Open video with decord
@@ -328,31 +379,36 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
     # Extract and save each frame
     frame_number = int(start_frame_number)
-    for frame_idx in range(len(vr)):
-        # Get frame as numpy array (RGB format)
-        frame_array = vr[frame_idx].asnumpy()
+    try:
+        for frame_idx in range(len(vr)):
+            # Get frame as numpy array (RGB format)
+            frame_array = vr[frame_idx].asnumpy()
 
-        # Convert to PIL Image
-        frame_image = Image.fromarray(frame_array)
+            # Convert to PIL Image
+            frame_image = Image.fromarray(frame_array)
 
-        # Save frame to BytesIO buffer
-        frame_buffer = BytesIO()
-        frame_image.save(frame_buffer, format='JPEG', quality=95)
-        frame_buffer.seek(0)
+            # Save frame to BytesIO buffer
+            frame_buffer = BytesIO()
+            frame_image.save(frame_buffer, format='JPEG', quality=95)
+            frame_buffer.seek(0)
 
-        # Create Frame database record
-        frame = Frame(video_chunk=video_chunk,
-                      frame_file=File(frame_buffer, f'frame{frame_number:07d}.jpg'),
-                      detections_file=None,
-                      frame_number=frame_number,
-                      status='ENQUEUED')
-        frame.save()
+            # Create Frame database record
+            frame = Frame(video_chunk=video_chunk,
+                          frame_file=File(frame_buffer, f'frame{frame_number:07d}.jpg'),
+                          detections_file=None,
+                          frame_number=frame_number,
+                          status='ENQUEUED')
+            frame.save()
 
-        if settings.USE_SYNCHRONOUS_PROCESSING:
-            detect(frame.id)
-        else:
-            detect.delay(frame.id)
-        frame_number += 1
+            if settings.USE_SYNCHRONOUS_PROCESSING:
+                detect(frame.id)
+            else:
+                detect.delay(frame.id)
+            frame_number += 1
+    finally:
+        # Explicitly release GPU memory to prevent CUDA memory leaks
+        del vr
+        gc.collect()
 
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
@@ -392,6 +448,18 @@ def handle_task_failure(task_id, exception, traceback, **kwargs):
     if any(keyword in error_msg for keyword in gpu_error_keywords):
         logger.error(f'GPU error detected in task {task_id}, shutting down worker: {exception}')
         sys.exit(1)
+
+
+@task_postrun.connect
+def check_gpu_memory_after_task(task_id, task, **kwargs):
+    """
+    Check GPU memory after extract and chunk_video tasks complete.
+    If usage exceeds threshold, exit worker so Docker can restart it.
+    Skip detect tasks to avoid impacting throughput.
+    """
+    task_name = task.name if task else ''
+    if task_name in ('processor.tasks.extract_frames', 'processor.tasks.chunk_video'):
+        check_gpu_memory_and_exit_if_high()
 
 
 @celery_app.task
@@ -462,7 +530,15 @@ def detect(frame_id: int) -> None:
     frame.save()
 
     if settings.CLEANUP_AFTER_PROCESSING and not result['detections']:
-        os.remove(frame.frame_file.path)
+        try:
+            frame_path = frame.frame_file.path
+            frame.frame_file.delete(save=True)
+            # Clean up empty parent directory
+            parent_dir = os.path.dirname(frame_path)
+            if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                os.rmdir(parent_dir)
+        except Exception as e:
+            logger.warning(f'Failed to delete frame file after detection: {e}')
 
 
 @celery_app.task
@@ -518,7 +594,19 @@ def draw_detections(self, video_id):
         frame_image.save(output_image, format='JPEG')
         output_image.seek(0)
         frame.detections_file = File(output_image, f'detections{frame.frame_number:07d}.jpg')
-        
+
+        # Delete the original frame file - we no longer need it after drawing detections
+        if settings.CLEANUP_AFTER_PROCESSING and frame.frame_file:
+            try:
+                frame_path = frame.frame_file.path
+                frame.frame_file.delete(save=False)
+                # Clean up empty parent directory
+                parent_dir = os.path.dirname(frame_path)
+                if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                    os.rmdir(parent_dir)
+            except Exception as e:
+                logger.warning(f'Failed to delete frame file: {e}')
+
         try:
             frame.save()
         except OSError as e:
@@ -595,3 +683,12 @@ def make_detection_video(self, video_id):
             self.retry(exc=e, countdown=60)
 
     shutil.rmtree(output_dir)
+
+    # Clean up detection images from storage after video is created
+    if settings.CLEANUP_AFTER_PROCESSING:
+        for frame in frames:
+            if frame.detections_file:
+                try:
+                    frame.detections_file.delete(save=True)
+                except Exception as e:
+                    logger.warning(f'Failed to delete detections file for frame {frame.id}: {e}')
