@@ -41,6 +41,7 @@ RUN unzip -q /tmp/video_codec_sdk.zip -d /tmp && \
     cp ${SDK_DIR}/Lib/linux/stubs/x86_64/* /usr/local/cuda/lib64/stubs/ && \
     rm -rf /tmp/video_codec_sdk.zip ${SDK_DIR}
 
+ARG CACHE_BUST=1
 # Build and install decord from fork with CUDA support
 # Temporarily add stubs to library path for build, then remove them
 RUN git clone --recursive https://github.com/evz/decord /tmp/decord && \

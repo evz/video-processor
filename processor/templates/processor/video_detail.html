@@ -1,0 +1,305 @@
+{% extends "processor/base.html" %}
+{% load humanize %}
+
+{% block title %}{{ video.name }} - Detection Video{% endblock %}
+
+{% block extra_css %}
+<style>
+    .breadcrumb {
+        margin-bottom: 20px;
+    }
+    .video-container {
+        background-color: #000;
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 30px;
+    }
+    .video-container video {
+        width: 100%;
+        max-height: 70vh;
+        display: block;
+    }
+    .video-details {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    .detail-card {
+        background-color: #252525;
+        padding: 20px;
+        border-radius: 8px;
+    }
+    .detail-card h3 {
+        margin: 0 0 15px 0;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        color: #888;
+        letter-spacing: 0.5px;
+    }
+    .detail-card .value {
+        font-size: 1.5rem;
+        color: #fff;
+    }
+    .detail-card .sub-value {
+        font-size: 0.9rem;
+        color: #888;
+        margin-top: 5px;
+    }
+    .channel-badge {
+        display: inline-block;
+        background-color: #0d6efd;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 1rem;
+    }
+    .video-title {
+        margin-bottom: 20px;
+    }
+    .video-title h2 {
+        margin: 0;
+        font-size: 1.5rem;
+        color: #fff;
+        word-break: break-all;
+    }
+    .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 20px;
+        color: #888;
+    }
+    .back-link:hover {
+        color: #fff;
+        text-decoration: none;
+    }
+
+    /* Tags section */
+    .tags-section {
+        background-color: #252525;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 30px;
+    }
+    .tags-section h3 {
+        margin: 0 0 15px 0;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        color: #888;
+        letter-spacing: 0.5px;
+    }
+    .current-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 15px;
+    }
+    .tag-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background-color: #0d6efd;
+        color: #fff;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.9rem;
+    }
+    .tag-badge a {
+        color: #fff;
+        text-decoration: none;
+        font-size: 0.8rem;
+    }
+    .tag-badge .remove-tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        background-color: rgba(0,0,0,0.2);
+        border-radius: 50%;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+    .tag-badge .remove-tag:hover {
+        background-color: rgba(0,0,0,0.4);
+    }
+    .no-tags {
+        color: #666;
+        font-style: italic;
+    }
+    .add-tag-form {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 15px;
+        padding-top: 15px;
+        border-top: 1px solid #333;
+    }
+    .add-tag-form select,
+    .add-tag-form input[type="text"] {
+        padding: 8px 12px;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background-color: #1a1a1a;
+        color: #fff;
+        font-size: 0.9rem;
+    }
+    .add-tag-form select {
+        min-width: 150px;
+    }
+    .add-tag-form input[type="text"] {
+        flex: 1;
+        min-width: 150px;
+    }
+    .add-tag-form button {
+        padding: 8px 16px;
+        background-color: #0d6efd;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: background-color 0.2s;
+    }
+    .add-tag-form button:hover {
+        background-color: #0b5ed7;
+    }
+    .add-tag-form .or-divider {
+        color: #666;
+        font-size: 0.85rem;
+    }
+
+    /* Quick tags */
+    .quick-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 15px;
+    }
+    .quick-tags form {
+        display: inline;
+    }
+    .quick-tag-btn {
+        padding: 6px 12px;
+        background-color: #333;
+        color: #888;
+        border: 1px solid #444;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: all 0.2s;
+    }
+    .quick-tag-btn:hover {
+        background-color: #444;
+        color: #fff;
+        border-color: #555;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="{% url 'video_list' %}" class="back-link">
+    &larr; Back to all videos
+</a>
+
+<div class="video-title">
+    <h2>{{ video.name|default:"Untitled Video" }}</h2>
+</div>
+
+{% if video.detections_file %}
+<div class="video-container">
+    <video controls preload="metadata">
+        <source src="{{ video.detections_file.url }}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+</div>
+{% else %}
+<div class="detail-card" style="text-align: center; padding: 60px;">
+    <p>No detection video available yet.</p>
+    <p style="color: #888;">Status: {{ video.status }}</p>
+</div>
+{% endif %}
+
+<!-- Tags Section -->
+<div class="tags-section">
+    <h3>Animal Tags</h3>
+
+    <div class="current-tags">
+        {% if video_tags %}
+            {% for tag in video_tags %}
+            <span class="tag-badge">
+                <a href="{% url 'video_list' %}?tag={{ tag.slug }}">{{ tag.name }}</a>
+                <form action="{% url 'remove_tag' video.id tag.id %}" method="post" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="remove-tag" title="Remove tag">&times;</button>
+                </form>
+            </span>
+            {% endfor %}
+        {% else %}
+            <span class="no-tags">No tags yet</span>
+        {% endif %}
+    </div>
+
+    <!-- Quick add common tags -->
+    {% if all_tags %}
+    <div class="quick-tags">
+        {% for tag in all_tags %}
+            {% if tag not in video_tags %}
+            <form action="{% url 'add_tag' video.id %}" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                <button type="submit" class="quick-tag-btn">+ {{ tag.name }}</button>
+            </form>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Add new tag -->
+    <form action="{% url 'add_tag' video.id %}" method="post" class="add-tag-form">
+        {% csrf_token %}
+        <input type="text" name="tag_name" placeholder="New tag (e.g., deer, coyote)" autocomplete="off">
+        <button type="submit">Add Tag</button>
+    </form>
+</div>
+
+<div class="video-details">
+    {% if channel %}
+    <div class="detail-card">
+        <h3>Camera</h3>
+        <div class="value">
+            <span class="channel-badge">Channel {{ channel }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if captured_at %}
+    <div class="detail-card">
+        <h3>Captured</h3>
+        <div class="value">{{ captured_at|date:"M j, Y" }}</div>
+        <div class="sub-value">{{ captured_at|time:"g:i:s A" }}</div>
+    </div>
+    {% endif %}
+
+    <div class="detail-card">
+        <h3>Detections</h3>
+        <div class="value">{{ total_detections|default:"0" }}</div>
+        <div class="sub-value">objects detected</div>
+    </div>
+
+    <div class="detail-card">
+        <h3>Processed</h3>
+        <div class="value">{{ video.updated|date:"M j, Y" }}</div>
+        <div class="sub-value">{{ video.updated|timesince }} ago</div>
+    </div>
+
+    {% if video.frame_count %}
+    <div class="detail-card">
+        <h3>Frames</h3>
+        <div class="value">{{ video.frame_count|intcomma }}</div>
+        <div class="sub-value">@ {{ video.frame_rate|floatformat:1 }} fps</div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

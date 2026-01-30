@@ -1,6 +1,17 @@
 from django.contrib import admin
 
-from .models import Video, Frame, Detection
+from .models import Video, Frame, Detection, Tag
+
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'video_count', 'created']
+    search_fields = ['name']
+    prepopulated_fields = {'slug': ('name',)}
+
+    def video_count(self, obj):
+        return obj.videos.count()
+    video_count.short_description = 'Videos'
 
 
 @admin.register(Video)
@@ -19,7 +30,7 @@ class VideoAdmin(admin.ModelAdmin):
         
 
     change_form_template = 'admin/video_change_form.html'
-    fields = ['video_file']
+    fields = ['video_file', 'tags']
     readonly_fields = [
         'name',
         'frame_count',
@@ -27,6 +38,7 @@ class VideoAdmin(admin.ModelAdmin):
         'created',
         'updated',
     ]
+    filter_horizontal = ['tags']
 
     list_display = [
         'name',
@@ -37,6 +49,8 @@ class VideoAdmin(admin.ModelAdmin):
         'detection_count',
         'detection_video_available',
     ]
+
+    list_filter = ['status']
 
     def format_date(self, date):
         return date.strftime('%Y-%m-%d %H:%M:%S')

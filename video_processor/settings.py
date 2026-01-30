@@ -14,8 +14,9 @@ DEBUG = os.getenv('DEBUG') != 'off'
 allowed_hosts = os.getenv('ALLOWED_HOSTS')
 
 if allowed_hosts:
-    ALLOWED_HOSTS = [allowed_hosts, gethostbyname(gethostname())]
-    CSRF_TRUSTED_ORIGINS = [f'https://*{allowed_hosts}']
+    hosts = [h.strip() for h in allowed_hosts.split(',') if h.strip()]
+    ALLOWED_HOSTS = hosts + [gethostbyname(gethostname())]
+    CSRF_TRUSTED_ORIGINS = [f'https://*{h}' for h in hosts]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -24,6 +25,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.humanize',
     'processor',
     'django_celery_results',
 ]
@@ -116,6 +118,35 @@ if os.getenv('USE_SYNCHRONOUS_PROCESSING') == 'true':
 else:
     USE_SYNCHRONOUS_PROCESSING = False
 
+# Tracking settings - filter static false positives by tracking detections across frames
+if os.getenv('USE_TRACKING') == 'false':
+    USE_TRACKING = False
+else:
+    USE_TRACKING = True  # Enabled by default
+
+# Minimum movement as fraction of frame diagonal to be considered "moving"
+# 0.05 = 5% of frame diagonal = ~54 pixels on 1080p (~96 pixels diagonally)
+MIN_DISPLACEMENT_THRESHOLD = float(os.getenv('MIN_DISPLACEMENT_THRESHOLD', '0.05'))
+
+# Minimum IoU for detection-track association
+TRACKING_IOU_THRESHOLD = float(os.getenv('TRACKING_IOU_THRESHOLD', '0.3'))
+
+# Maximum frames a track can be lost before deletion
+TRACKING_MAX_AGE = int(os.getenv('TRACKING_MAX_AGE', '30'))
+
+# High-confidence override for static tracks:
+# Tracks shorter than this duration (seconds) with high confidence are kept
+# even if they don't move much (e.g., deer standing still munching grass)
+TRACKING_MAX_STATIC_DURATION = float(os.getenv('TRACKING_MAX_STATIC_DURATION', '120'))
+
+# Minimum confidence to override static classification for short tracks
+# MegaDetector is more confident about real animals than false positives
+TRACKING_MIN_CONFIDENCE_OVERRIDE = float(os.getenv('TRACKING_MIN_CONFIDENCE_OVERRIDE', '0.80'))
+
+# Detection threshold - lowered now that tracking filters false positives
+# Was 0.65, now 0.4 to catch more potential animals
+DETECTION_THRESHOLD = float(os.getenv('DETECTION_THRESHOLD', '0.4'))
+
 if os.getenv('AWS_ACCESS_KEY_ID'):
     FRAMES_BUCKET = os.getenv('FRAMES_BUCKET')
     VIDEOS_BUCKET = os.getenv('VIDEOS_BUCKET')
@@ -142,14 +173,14 @@ else:
             "BACKEND": "django.core.files.storage.FileSystemStorage",
             "OPTIONS": {
                 "location": f'{STORAGE_DIR}/frames',
-                "base_url": "frames",
+                "base_url": "/media/frames/",
             },
         },
         "videos": {
             "BACKEND": "django.core.files.storage.FileSystemStorage",
             "OPTIONS": {
                 "location": f'{STORAGE_DIR}/videos',
-                "base_url": "videos",
+                "base_url": "/media/videos/",
             },
         },
     }
@@ -187,6 +218,9 @@ CELERY_TASK_ROUTES = {
     },
     'processor.tasks.detect': {
         'queue': 'detect'
+    },
+    'processor.tasks.track_and_filter_detections': {
+        'queue': 'create_output'
     },
     'processor.tasks.draw_detections': {
         'queue': 'create_output'

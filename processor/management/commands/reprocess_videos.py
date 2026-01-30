@@ -8,9 +8,12 @@ Usage:
     python manage.py reprocess_videos --fix-completed
 """
 
+from celery import chain
+from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db.models import Sum
 from processor.models import Video, VideoChunk, Frame
-from processor.tasks import chunk_video, extract_frames, draw_detections
+from processor.tasks import chunk_video, extract_frames, draw_detections, track_and_filter_detections
 
 
 class Command(BaseCommand):
@@ -41,6 +44,11 @@ class Command(BaseCommand):
             help='Fix videos that have all frames completed but are still marked PROCESSING'
         )
         parser.add_argument(
+            '--resume-stuck',
+            action='store_true',
+            help='Resume videos with chunks stuck in PROCESSING (interrupted extraction)'
+        )
+        parser.add_argument(
             '--dry-run',
             action='store_true',
             help='Show what would be reprocessed without actually doing it'
@@ -58,6 +66,9 @@ class Command(BaseCommand):
         if options['stuck_chunks']:
             self.reprocess_stuck_chunks(dry_run)
 
+        if options['resume_stuck']:
+            self.resume_stuck_extraction(dry_run)
+
         if options['ids']:
             self.reprocess_by_ids(options['ids'], dry_run)
 
@@ -66,42 +77,103 @@ class Command(BaseCommand):
             video_ids = list(range(start_id, end_id + 1))
             self.reprocess_by_ids(video_ids, dry_run)
 
-        if not any([options['stuck_chunks'], options['ids'], options['range'], options['fix_completed']]):
+        if not any([options['stuck_chunks'], options['ids'], options['range'],
+                     options['fix_completed'], options['resume_stuck']]):
             self.stdout.write(self.style.WARNING(
-                'No action specified. Use --stuck-chunks, --ids, --range, or --fix-completed'
+                'No action specified. Use --stuck-chunks, --resume-stuck, --ids, --range, or --fix-completed'
             ))
 
     def fix_completed_videos(self, dry_run):
-        """Fix videos that have all frames completed but are still marked PROCESSING."""
-        self.stdout.write('\n=== Fixing videos with all frames completed ===\n')
+        """Fix videos that have all chunks completed but are still marked PROCESSING."""
+        self.stdout.write('\n=== Fixing videos with all chunks completed ===\n')
 
         fixed_count = 0
         for video in Video.objects.filter(status='PROCESSING'):
-            if video.frame_count is None:
+            chunks = VideoChunk.objects.filter(video=video)
+
+            # Skip if no chunks yet
+            if not chunks.exists():
                 continue
 
+            # Skip if any chunks are incomplete
+            if chunks.exclude(status='COMPLETED').exists():
+                continue
+
+            # Use sum of chunk frame counts, not original video.frame_count
+            # (FFmpeg segmentation can lose frames at boundaries)
+            chunk_frame_total = chunks.aggregate(total=Sum('frame_count'))['total'] or 0
             completed_frames = Frame.objects.filter(
                 video_chunk__video_id=video.id,
                 status='COMPLETED'
             ).count()
 
-            # Check if completed (with some tolerance for frame count discrepancies)
-            if completed_frames >= video.frame_count or \
-               (completed_frames > 0 and abs(completed_frames - video.frame_count) <= video.frame_count * 0.01):
+            if completed_frames >= chunk_frame_total:
                 self.stdout.write(
-                    f'Video {video.id} ({video.name}): {completed_frames}/{video.frame_count} frames completed'
+                    f'Video {video.id} ({video.name}): {completed_frames}/{chunk_frame_total} frames completed '
+                    f'(original video had {video.frame_count})'
                 )
 
                 if not dry_run:
                     video.status = 'COMPLETED'
                     video.save()
-                    draw_detections.delay(video.id)
+                    # Chain tracking and drawing tasks
+                    if settings.USE_TRACKING:
+                        chain(
+                            track_and_filter_detections.s(video.id),
+                            draw_detections.s()
+                        ).delay()
+                    else:
+                        draw_detections.delay(video.id)
                     self.stdout.write(self.style.SUCCESS(f'  -> Marked as COMPLETED and queued for output generation'))
                 else:
                     self.stdout.write(self.style.WARNING(f'  -> Would mark as COMPLETED'))
                 fixed_count += 1
 
         self.stdout.write(f'\nFixed {fixed_count} video(s)\n')
+
+    def resume_stuck_extraction(self, dry_run):
+        """Resume videos with chunks stuck in PROCESSING status."""
+        self.stdout.write('\n=== Resuming stuck PROCESSING chunks ===\n')
+
+        stuck_chunks = VideoChunk.objects.filter(status='PROCESSING')
+        affected_videos = Video.objects.filter(
+            id__in=stuck_chunks.values_list('video_id', flat=True).distinct()
+        )
+
+        self.stdout.write(
+            f'Found {stuck_chunks.count()} stuck chunk(s) '
+            f'across {affected_videos.count()} video(s)\n'
+        )
+
+        requeued = 0
+        for video in affected_videos.order_by('id'):
+            video_stuck = stuck_chunks.filter(video=video)
+            total_chunks = VideoChunk.objects.filter(video=video).count()
+            completed_chunks = VideoChunk.objects.filter(video=video, status='COMPLETED').count()
+
+            total_frames = Frame.objects.filter(video_chunk__video=video).count()
+            expected = video.frame_count or 0
+
+            self.stdout.write(
+                f'Video {video.id} ({video.name}): '
+                f'{video_stuck.count()} stuck chunks, '
+                f'{completed_chunks}/{total_chunks} completed, '
+                f'{total_frames}/{expected} frames'
+            )
+
+            if not dry_run:
+                for chunk in video_stuck:
+                    extract_frames.delay(chunk.id)
+                self.stdout.write(self.style.SUCCESS(
+                    f'  -> Requeued {video_stuck.count()} chunk(s) for extraction'
+                ))
+            else:
+                self.stdout.write(self.style.WARNING(
+                    f'  -> Would requeue {video_stuck.count()} chunk(s)'
+                ))
+            requeued += video_stuck.count()
+
+        self.stdout.write(f'\nRequeued {requeued} chunk(s)\n')
 
     def reprocess_stuck_chunks(self, dry_run):
         """Requeue videos that have status=PROCESSING but no chunks created."""
@@ -167,10 +239,15 @@ class Command(BaseCommand):
                     chunk_video.delay(video.id)
                     self.stdout.write(self.style.SUCCESS(f'  -> Requeued for chunking'))
                 elif frame_count < (video.frame_count or 0):
-                    # Have chunks but missing frames - requeue extraction
-                    for chunk in VideoChunk.objects.filter(video=video, status='ENQUEUED'):
+                    # Have chunks but missing frames - requeue incomplete chunks
+                    incomplete_chunks = VideoChunk.objects.filter(
+                        video=video, status__in=['ENQUEUED', 'PROCESSING']
+                    )
+                    for chunk in incomplete_chunks:
                         extract_frames.delay(chunk.id)
-                    self.stdout.write(self.style.SUCCESS(f'  -> Requeued incomplete chunks for extraction'))
+                    self.stdout.write(self.style.SUCCESS(
+                        f'  -> Requeued {incomplete_chunks.count()} incomplete chunks for extraction'
+                    ))
                 else:
                     self.stdout.write(self.style.WARNING(f'  -> Already has all frames'))
             else:

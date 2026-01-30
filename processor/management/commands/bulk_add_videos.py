@@ -179,27 +179,41 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING('No videos match the time criteria'))
                 return
 
-        # Apply limit
-        if limit and len(video_files) > limit:
-            video_files = video_files[:limit]
-            self.stdout.write(f'Limited to {limit} videos')
-
-        self.stdout.write(self.style.SUCCESS(f'Will process {len(video_files)} video(s)'))
+        if limit:
+            self.stdout.write(f'Will enqueue up to {limit} new videos (skipping already processed)')
+        else:
+            self.stdout.write(self.style.SUCCESS(f'Will process {len(video_files)} video(s)'))
 
         if dry_run:
             self.stdout.write(self.style.WARNING('\nDRY RUN - No videos will be added\n'))
-            for i, video_path in enumerate(video_files[:30]):
-                self.stdout.write(f'  {i+1}. {os.path.basename(video_path)}')
-            if len(video_files) > 30:
-                self.stdout.write(f'  ... and {len(video_files) - 30} more')
+            # In dry run, show which videos would be added (up to limit)
+            shown = 0
+            skipped = 0
+            for video_path in video_files:
+                filename = os.path.basename(video_path)
+                if Video.objects.filter(video_file__endswith=filename).exists():
+                    skipped += 1
+                    continue
+                shown += 1
+                if shown <= 30:
+                    self.stdout.write(f'  {shown}. {filename}')
+                if limit and shown >= limit:
+                    break
+            if shown > 30:
+                self.stdout.write(f'  ... and {shown - 30} more')
+            self.stdout.write(f'\nWould add: {shown}, Would skip: {skipped} (already exist)')
             return
 
-        # Process each video
+        # Process each video, stopping when we've added `limit` new videos
         added_count = 0
         skipped_count = 0
         error_count = 0
 
         for i, video_path in enumerate(video_files):
+            # Stop if we've reached the limit of NEW videos
+            if limit and added_count >= limit:
+                break
+
             try:
                 result = self.add_video(video_path)
                 if result == 'added':

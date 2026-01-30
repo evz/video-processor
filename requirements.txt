@@ -11,3 +11,4 @@ ultralytics-yolov5==0.1.1
 django-storages[s3]==1.14.2
 watchdog==2.1.5
 astral==3.2
+scipy>=1.11.0

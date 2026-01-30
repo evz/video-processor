@@ -23,10 +23,12 @@ from watchdog.events import FileSystemEventHandler
 
 from django.conf import settings
 from django.core.files import File
+from django.db.models import Sum, Count, Q
+from celery import chain
 from celery.signals import worker_process_init, task_failure, task_postrun
 from video_processor import celery_app
 
-from .models import Video, VideoChunk, Frame, Detection
+from .models import Video, VideoChunk, Frame, Detection, Track
 
 logger = logging.getLogger(__name__)
 
@@ -355,11 +357,23 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
     start_frame_number = video_chunk.start_frame
 
-    if video_chunk.status != 'ENQUEUED':
+    if video_chunk.status == 'COMPLETED':
         return
 
-    video_chunk.status = 'PROCESSING'
-    video_chunk.save()
+    if video_chunk.status == 'PROCESSING':
+        # Resuming an interrupted extraction - find already extracted frames
+        existing_frame_numbers = set(
+            Frame.objects.filter(video_chunk=video_chunk)
+            .values_list('frame_number', flat=True)
+        )
+        logger.info(
+            f'Resuming chunk {video_chunk_id}: '
+            f'{len(existing_frame_numbers)}/{video_chunk.frame_count} frames already extracted'
+        )
+    else:
+        existing_frame_numbers = set()
+        video_chunk.status = 'PROCESSING'
+        video_chunk.save()
 
     output_frames_dir = os.path.join(settings.STORAGE_DIR, 'frames')
     video_basename = os.path.basename(video_chunk.video.video_file.name).split('.')[0]
@@ -379,10 +393,25 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
     # Extract and save each frame
     frame_number = int(start_frame_number)
+    skipped_frames = 0
     try:
         for frame_idx in range(len(vr)):
+            # Skip frames already extracted from a previous interrupted attempt
+            if frame_number in existing_frame_numbers:
+                frame_number += 1
+                continue
+
             # Get frame as numpy array (RGB format)
             frame_array = vr[frame_idx].asnumpy()
+
+            # Handle empty frames (decord returns empty array when frame can't be decoded,
+            # e.g., B-frames referencing data outside this video segment)
+            # Check ndim because 0-d arrays have size=1 but shape=()
+            if frame_array.ndim < 2 or frame_array.size == 0:
+                logger.warning(f'Chunk {video_chunk_id} frame {frame_number}: empty frame from decord, skipping')
+                skipped_frames += 1
+                frame_number += 1
+                continue
 
             # Convert to PIL Image
             frame_image = Image.fromarray(frame_array)
@@ -405,6 +434,12 @@ def extract_frames(self, video_chunk_id: int) -> None:
             else:
                 detect.delay(frame.id)
             frame_number += 1
+
+        if skipped_frames > 0:
+            logger.info(f'Chunk {video_chunk_id}: skipped {skipped_frames} undecodable frames')
+            # Adjust frame_count to reflect actual extractable frames
+            video_chunk.frame_count -= skipped_frames
+            video_chunk.end_frame -= skipped_frames
     finally:
         # Explicitly release GPU memory to prevent CUDA memory leaks
         del vr
@@ -412,7 +447,7 @@ def extract_frames(self, video_chunk_id: int) -> None:
 
     video_chunk.status = 'COMPLETED'
     video_chunk.save()
-    
+
     if settings.CLEANUP_AFTER_PROCESSING:
         os.remove(video_chunk.video_file.path)
 
@@ -474,12 +509,15 @@ def detect(frame_id: int) -> None:
     """
     
     frame = Frame.objects.get(id=frame_id)
-    
-    if frame.status != 'ENQUEUED':
+
+    if frame.status == 'PROCESSING':
+        # Resuming after interrupted attempt - clean up partial detections
+        Detection.objects.filter(frame=frame).delete()
+    elif frame.status != 'ENQUEUED':
         return
 
-    global detector 
-    
+    global detector
+
     if not detector:
         from megadetector.detection.run_detector import load_detector
         detector = load_detector('MDV5A')
@@ -505,7 +543,7 @@ def detect(frame_id: int) -> None:
         result = detector.generate_detections_one_image(
             image,
             f'frame{frame.frame_number:07d}.jpg',
-            detection_threshold=0.65
+            detection_threshold=settings.DETECTION_THRESHOLD
         )
     except Exception as e:
         logger.error(f"Image {frame.video.name} - {frame.frame_number} cannot be processed: {e}")
@@ -542,24 +580,175 @@ def detect(frame_id: int) -> None:
 
 
 @celery_app.task
+def track_and_filter_detections(video_id: int) -> int:
+    """
+    Track detections across frames and filter out static objects.
+
+    Uses IoU-based tracking to associate detections across frames.
+    A track is considered a FALSE POSITIVE (static) if:
+      - It doesn't move enough (displacement < threshold), AND
+      - It's either long-duration OR low-confidence
+
+    Real animals may stand still (e.g., deer munching grass), so we keep
+    short-duration high-confidence tracks even if they don't move much.
+
+    Args:
+        video_id: The ID of the Video to process
+    """
+    from .tracking import SimpleTracker, group_detections_by_frame
+
+    logger.info(f'Starting tracking for video {video_id}')
+
+    video = Video.objects.get(id=video_id)
+    frame_rate = video.frame_rate or 20.0
+
+    # Get all detections ordered by frame
+    detections = Detection.objects.filter(
+        frame__video_chunk__video_id=video_id
+    ).select_related('frame').order_by('frame__frame_number')
+
+    if not detections.exists():
+        logger.info(f'No detections found for video {video_id}, skipping tracking')
+        return video_id
+
+    # Group by frame number
+    frames_dict = group_detections_by_frame(detections)
+
+    # Run tracker
+    tracker = SimpleTracker(
+        iou_threshold=settings.TRACKING_IOU_THRESHOLD,
+        max_age=settings.TRACKING_MAX_AGE,
+        min_hits=3
+    )
+
+    for frame_num in sorted(frames_dict.keys()):
+        frame_detections = frames_dict[frame_num]
+        tracker.update(frame_detections, frame_num)
+
+    # Finalize tracking
+    tracker.finalize()
+
+    # Create Track records and associate detections
+    static_track_ids = []
+    for tracked_obj in tracker.get_completed_tracks():
+        displacement = tracked_obj.displacement()
+        duration_seconds = (tracked_obj.end_frame - tracked_obj.start_frame) / frame_rate
+
+        # Get max confidence for this track
+        track_dets = Detection.objects.filter(id__in=tracked_obj.detection_ids)
+        max_confidence = max(d.confidence for d in track_dets) if track_dets else 0.0
+
+        # Determine if this is a real animal or static false positive
+        # Rule 1: Moving tracks are real
+        is_moving = displacement >= settings.MIN_DISPLACEMENT_THRESHOLD
+
+        # Rule 2: Brief high-confidence tracks are likely real animals standing still
+        # (e.g., deer munching grass for 10-15 seconds)
+        is_brief_high_conf = (
+            duration_seconds < settings.TRACKING_MAX_STATIC_DURATION and
+            max_confidence >= settings.TRACKING_MIN_CONFIDENCE_OVERRIDE
+        )
+
+        # Keep if moving OR brief+high-confidence
+        is_static = not (is_moving or is_brief_high_conf)
+
+        track_record = Track.objects.create(
+            video_id=video_id,
+            track_id=tracked_obj.track_id,
+            category=tracked_obj.category,
+            start_frame=tracked_obj.start_frame,
+            end_frame=tracked_obj.end_frame,
+            total_displacement=displacement,
+            is_static=is_static
+        )
+
+        # Associate detections with track
+        Detection.objects.filter(id__in=tracked_obj.detection_ids).update(track=track_record)
+
+        if is_static:
+            static_track_ids.append(track_record.id)
+            logger.info(
+                f'Track {tracked_obj.track_id}: STATIC (disp={displacement:.4f}, '
+                f'dur={duration_seconds:.1f}s, conf={max_confidence:.2f}), '
+                f'{len(tracked_obj.detection_ids)} detections will be deleted'
+            )
+        else:
+            reason = 'moving' if is_moving else 'high-confidence'
+            logger.info(
+                f'Track {tracked_obj.track_id}: KEEP ({reason}, disp={displacement:.4f}, '
+                f'dur={duration_seconds:.1f}s, conf={max_confidence:.2f}), '
+                f'{len(tracked_obj.detection_ids)} detections kept'
+            )
+
+    # Delete detections belonging to static tracks
+    if static_track_ids:
+        deleted_count, _ = Detection.objects.filter(track_id__in=static_track_ids).delete()
+        logger.info(f'Deleted {deleted_count} detections from {len(static_track_ids)} static tracks')
+
+    logger.info(f'Tracking complete for video {video_id}')
+
+    return video_id
+
+
+@celery_app.task
 def find_completed_videos() -> None:
     """Check for videos that have finished processing and trigger output generation."""
-    for video in Video.objects.exclude(status='COMPLETED'):
-        completed_frames = Frame.objects.filter(video_chunk__video_id=video.id).filter(status='COMPLETED').count()
-        
-        if video.frame_count:
+    # Bulk query: get all non-completed videos with their chunk stats in one query
+    videos_with_stats = Video.objects.exclude(status='COMPLETED').annotate(
+        chunk_count=Count('videochunk'),
+        incomplete_chunks=Count('videochunk', filter=~Q(videochunk__status='COMPLETED')),
+        chunk_frame_total=Sum('videochunk__frame_count'),
+    ).filter(
+        chunk_count__gt=0,  # Has at least one chunk
+        incomplete_chunks=0,  # All chunks are completed
+    ).values_list('id', 'chunk_frame_total')
 
-            # Sometimes we can end up with more frames extracted from the video
-            # than what decord thought there were to begin with. I really don't
-            # understand why but, that's why we have to compare things this way ...
-            if completed_frames >= video.frame_count:
-                video.status = 'COMPLETED'
-                video.save()
-                
-                if settings.USE_SYNCHRONOUS_PROCESSING:
-                    draw_detections(video.id)
-                else:
-                    draw_detections.delay(video.id)
+    # Build dict of video_id -> chunk_frame_total
+    video_targets = {vid: total for vid, total in videos_with_stats}
+
+    if not video_targets:
+        return
+
+    # Bulk query: count completed frames per video
+    completed_counts = Frame.objects.filter(
+        video_chunk__video_id__in=video_targets.keys(),
+        status='COMPLETED'
+    ).values('video_chunk__video_id').annotate(
+        completed=Count('id')
+    )
+
+    completed_by_video = {
+        row['video_chunk__video_id']: row['completed']
+        for row in completed_counts
+    }
+
+    # Find videos that are ready to complete
+    ready_video_ids = [
+        vid for vid, target in video_targets.items()
+        if completed_by_video.get(vid, 0) >= target
+    ]
+
+    if not ready_video_ids:
+        return
+
+    # Mark videos as completed
+    Video.objects.filter(id__in=ready_video_ids).update(status='COMPLETED')
+
+    # Trigger post-processing for each completed video
+    for video_id in ready_video_ids:
+        if settings.USE_SYNCHRONOUS_PROCESSING:
+            if settings.USE_TRACKING:
+                track_and_filter_detections(video_id)
+            draw_detections(video_id)
+        else:
+            # Chain tracking and drawing tasks to run sequentially but async
+            if settings.USE_TRACKING:
+                chain(
+                    track_and_filter_detections.s(video_id),
+                    draw_detections.s()
+                ).delay()
+            else:
+                draw_detections.delay(video_id)
 
 
 @celery_app.task(bind=True, max_retries=None)

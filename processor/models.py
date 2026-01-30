@@ -21,6 +21,25 @@ StatusChoice = Literal['ENQUEUED', 'PROCESSING', 'COMPLETED', 'FAILED']
 CategoryChoice = Literal['1', '2', '3']
 
 
+class Tag(models.Model):
+    """Tags for categorizing videos by animal type or other criteria."""
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=100, unique=True)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+
 class Video(models.Model):
     name = models.CharField(max_length=1000, null=True)
     video_file = models.FileField(storage=storages['videos'])
@@ -28,9 +47,10 @@ class Video(models.Model):
     frame_count = models.IntegerField(null=True)
     frame_rate = models.FloatField(default=20.0)
     status = models.CharField(max_length=10, choices=STATI, default='ENQUEUED')
+    tags = models.ManyToManyField(Tag, blank=True, related_name='videos')
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
-    
+
     def __str__(self):
         return f'Video {self.id}'
 
@@ -79,6 +99,23 @@ class Frame(models.Model):
         return f'{self.video_chunk.name} - Frame {self.frame_number}'
 
 
+class Track(models.Model):
+    """Represents a tracked object across multiple frames."""
+    video = models.ForeignKey(Video, on_delete=models.CASCADE)
+    track_id = models.IntegerField()  # Unique ID within video
+    category = models.CharField(choices=DETECTION_CATEGORIES, max_length=1)
+    start_frame = models.IntegerField()
+    end_frame = models.IntegerField()
+    total_displacement = models.FloatField(default=0.0)  # Movement metric (fraction of frame diagonal)
+    is_static = models.BooleanField(default=False)  # Flagged as non-moving (false positive)
+
+    class Meta:
+        unique_together = ['video', 'track_id']
+
+    def __str__(self):
+        return f'Track {self.track_id} for Video {self.video.id} ({self.start_frame}-{self.end_frame})'
+
+
 class Detection(models.Model):
     frame = models.ForeignKey(Frame, on_delete=models.CASCADE)
     category = models.CharField(choices=DETECTION_CATEGORIES, max_length=1)
@@ -87,6 +124,7 @@ class Detection(models.Model):
     y_coord = models.FloatField()
     box_width = models.FloatField()
     box_height = models.FloatField()
+    track = models.ForeignKey(Track, on_delete=models.SET_NULL, null=True, blank=True)
 
     def __str__(self):
         return f'{self.frame} ({self.x_coord}, {self.y_coord}, {self.box_width}, {self.box_height})'

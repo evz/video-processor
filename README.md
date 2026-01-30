@@ -99,6 +99,17 @@ The demo automatically creates a `.env` file with sensible defaults, but you can
 | `EXTRACT_WORKERS_PER_HOST` | `1` | Number of frame extraction workers |
 | `DETECT_WORKERS_PER_HOST` | `1` | Number of AI detection workers |
 
+**Object tracking settings** (filter static false positives):
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `USE_TRACKING` | `true` | Enable object tracking to filter static false positives |
+| `DETECTION_THRESHOLD` | `0.4` | MegaDetector confidence threshold (lowered from 0.65 since tracking filters noise) |
+| `MIN_DISPLACEMENT_THRESHOLD` | `0.05` | Minimum movement as fraction of frame diagonal to be considered "moving" |
+| `TRACKING_IOU_THRESHOLD` | `0.3` | Minimum IoU for detection-track association |
+| `TRACKING_MAX_AGE` | `30` | Frames before a lost track is deleted |
+| `TRACKING_MAX_STATIC_DURATION` | `120` | Max duration (seconds) for high-confidence override (keeps still animals) |
+| `TRACKING_MIN_CONFIDENCE_OVERRIDE` | `0.80` | Min confidence to keep short-duration static tracks (e.g., deer munching grass) |
+
 **AWS-specific variables** (for distributed setup):
 | Variable | Description |
 |----------|-------------|
@@ -172,7 +183,8 @@ python3 manage.py reprocess_videos --stuck-chunks --dry-run
 ## 🎯 What This Project Demonstrates
 
 - **Distributed Systems**: Celery-based processing pipeline with multiple worker types
-- **AI/ML Integration**: MegaDetector v5a for object detection  
+- **AI/ML Integration**: MegaDetector v5a for object detection
+- **Object Tracking**: IoU-based tracking to filter static false positives
 - **GPU Computing**: CUDA acceleration for video processing
 - **Cloud Architecture**: AWS deployment with S3 storage and SQS messaging
 - **Containerization**: Docker setup for local and distributed deployment
@@ -186,9 +198,10 @@ python3 manage.py reprocess_videos --stuck-chunks --dry-run
 │   (Django Web)  │    │  (30s segments) │    │   (FFmpeg)      │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                         │
+                                                        ▼
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ Generate Output │◀───│  AI Detection   │◀───│   Queue Frames  │
-│   (Final Video) │    │ (MegaDetector)  │    │   (Parallel)    │
+│ Generate Output │◀───│ Object Tracking │◀───│  AI Detection   │
+│   (Final Video) │    │ (Filter Static) │    │ (MegaDetector)  │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
@@ -382,15 +395,15 @@ and I'll see if I can help you out.
 
 The main output of this is a DB table that records where in an image the
 detector found something and what kind of a thing it is. What does it look
-like? Here's what the DB table looks like: 
+like? Here's what the DB table looks like:
 
 ```
-  id  | category | confidence |  x_coord  | y_coord | box_width | box_height | frame_id 
-------+----------+------------+-----------+---------+-----------+------------+----------
-  319 | 2        |      0.699 |   0.08125 |  0.3629 |      0.05 |     0.3407 |     1331
-  366 | 2        |      0.793 |   0.07812 |  0.3638 |   0.05312 |     0.3407 |     1332
-  314 | 2        |      0.793 |   0.07812 |  0.3638 |   0.05312 |     0.3407 |     1333
-  348 | 2        |      0.736 |   0.07604 |  0.3638 |   0.05572 |     0.3388 |     1334
+  id  | category | confidence |  x_coord  | y_coord | box_width | box_height | frame_id | track_id
+------+----------+------------+-----------+---------+-----------+------------+----------+----------
+  319 | 2        |      0.699 |   0.08125 |  0.3629 |      0.05 |     0.3407 |     1331 |       12
+  366 | 2        |      0.793 |   0.07812 |  0.3638 |   0.05312 |     0.3407 |     1332 |       12
+  314 | 2        |      0.793 |   0.07812 |  0.3638 |   0.05312 |     0.3407 |     1333 |       12
+  348 | 2        |      0.736 |   0.07604 |  0.3638 |   0.05572 |     0.3388 |     1334 |       12
 
 ... etc ...
 ```
@@ -398,7 +411,21 @@ The `category` is what kind of thing (1 = animal, 2 = person, 3 = vehicle) is
 represented by the detection. The `confidence` is how confident the model was
 that it is, in fact, the thing that it thinks it is. The coordinates represent
 the upper left hand corner of where the detection was in the image and you can
-use the `box_width` and `box_height` to figure out how big the box is. 
+use the `box_width` and `box_height` to figure out how big the box is. The
+`track_id` links the detection to a tracked object across frames.
+
+There's also a `Track` table that records information about each tracked object:
+
+```
+  id  | video_id | track_id | category | start_frame | end_frame | total_displacement | is_static
+------+----------+----------+----------+-------------+-----------+--------------------+-----------
+   12 |        1 |       12 | 2        |        1331 |      1400 |             0.1523 | false
+   13 |        1 |       13 | 1        |         500 |       520 |             0.0021 | true
+
+... etc ...
+```
+Tracks marked as `is_static=true` are likely false positives (static objects
+like tree stumps) and their detections are automatically deleted. 
 
 There's a process that checks every so often to see if there are any videos
 that are done processing and, if so, it kicks off the process of taking all the
@@ -476,7 +503,24 @@ AWS).
 **Detect whether or not there are interesting things in the images** This is
 the meat and potatoes of the process. It uses the MegaDetector v5a model to
 figure out if there are likely to be animals, people, or vehicles in each frame
-of the video and, if it finds things, it saves its findings to a DB table. 
+of the video and, if it finds things, it saves its findings to a DB table.
+
+**Track objects and filter static false positives** MegaDetector sometimes
+flags static objects like tree stumps, rocks, or shadows as animals. To fix
+this without raising the detection threshold (which would miss real animals),
+the system now tracks detections across frames using IoU-based matching and
+uses a combined heuristic to distinguish real animals from false positives:
+
+1. **Movement check**: Objects that move significantly (>5% of frame diagonal) are kept
+2. **Confidence + duration check**: Objects that appear briefly (<120s) with high confidence (>0.80) are kept, even if stationary (e.g., deer munching grass)
+3. **Everything else is filtered**: Long-duration low-movement detections are almost certainly stumps or rocks
+
+This approach handles the common case where deer walk into frame, stand still
+eating for 10-15 seconds, move to another spot, more munching, etc. The key
+insight is that false positives (stumps) are detected for minutes to hours,
+while real animals typically appear for seconds to a couple minutes. The
+tracking uses a simple IoU-based algorithm inspired by SORT/OC-SORT with the
+Hungarian algorithm for optimal detection-to-track assignment.
 
 **Check if videos are done processing and stitch the interesting images back
 into a video** There's a periodic task that runs every 10 seconds to see if
@@ -531,10 +575,11 @@ encounter. All I want is to stare at cute little animals in my backyard!
 
 ## 🛠️ Technologies
 
-**Core Stack**: Django, Celery, PostgreSQL, Redis/SQS  
-**AI/ML**: MegaDetector v5a, PIL  
-**Video Processing**: FFmpeg (CPU and GPU-accelerated)  
-**Infrastructure**: Docker, CUDA (optional)  
+**Core Stack**: Django, Celery, PostgreSQL, Redis/SQS
+**AI/ML**: MegaDetector v5a, PIL
+**Object Tracking**: IoU-based tracker with Hungarian algorithm (scipy)
+**Video Processing**: FFmpeg (CPU and GPU-accelerated)
+**Infrastructure**: Docker, CUDA (optional)
 **Cloud**: AWS (EC2, S3, SQS)
 
 ### A coyote walking through my backyard in the middle of the night

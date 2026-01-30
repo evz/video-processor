@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Video Processor{% endblock %}</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #252525;
+            padding: 15px 0;
+            border-bottom: 1px solid #333;
+            margin-bottom: 30px;
+        }
+        header .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            color: #fff;
+        }
+        header h1 a {
+            color: #fff;
+            text-decoration: none;
+        }
+        header nav a {
+            color: #888;
+            text-decoration: none;
+            margin-left: 20px;
+        }
+        header nav a:hover {
+            color: #fff;
+        }
+        a {
+            color: #6ea8fe;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .breadcrumb {
+            margin-bottom: 20px;
+            color: #888;
+        }
+        .breadcrumb a {
+            color: #888;
+        }
+        .breadcrumb a:hover {
+            color: #fff;
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><a href="{% url 'video_list' %}">Detection Videos</a></h1>
+            <nav>
+                <a href="/admin/">Admin</a>
+            </nav>
+        </div>
+    </header>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
