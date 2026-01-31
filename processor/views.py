@@ -37,7 +37,7 @@ def parse_video_datetime(name):
 def video_list(request):
     """List all completed videos with detection files and enough detections."""
     videos = Video.objects.filter(
-        status='COMPLETED',
+        status='COMPLETED',  # Excludes DELETED videos
     ).exclude(
         detections_file=''
     ).annotate(

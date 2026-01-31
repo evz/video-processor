@@ -9,6 +9,7 @@ STATI: Dict[str, str] = {
     'PROCESSING': 'Processing',
     'COMPLETED': 'Completed',
     'FAILED': 'Failed',
+    'DELETED': 'Deleted',
 }
 
 DETECTION_CATEGORIES: Dict[str, str] = {

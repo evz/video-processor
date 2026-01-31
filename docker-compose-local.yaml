@@ -7,7 +7,8 @@ services:
       - ${STORAGE_MOUNT:-.}:/output
       - ${BULK_VIDEO_DIR:-/dev/null}:/bulk-videos:ro
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       STORAGE_MOUNT: /output
     command: ['python3', 'manage.py', 'runserver', '0.0.0.0:8000']
@@ -21,7 +22,8 @@ services:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       STORAGE_MOUNT: /output
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'chunk@%h', '-l', 'INFO', '-Q', 'chunk_video', '--concurrency', '1']
@@ -41,12 +43,13 @@ services:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       STORAGE_MOUNT: /output
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'extract@%h', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1', '--pool', 'solo']
     deploy:
-      replicas: ${EXTRACT_WORKERS_PER_HOST}
+      replicas: ${EXTRACT_WORKERS_PER_HOST:-1}
       resources:
         reservations:
           devices:
@@ -61,12 +64,13 @@ services:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       STORAGE_MOUNT: /output
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'detect@%h', '-l', 'ERROR', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
     deploy:
-      replicas: ${DETECT_WORKERS_PER_HOST}
+      replicas: ${DETECT_WORKERS_PER_HOST:-1}
       resources:
         reservations:
           devices:
@@ -81,7 +85,8 @@ services:
       - .:/code
       - ${STORAGE_MOUNT:-.}:/output
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       STORAGE_MOUNT: /output
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'output@%h', '-B', '-l', 'INFO', '-Q', 'create_output', '--concurrency', '1']
@@ -102,7 +107,8 @@ services:
     image: 'postgres:15'
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       POSTGRES_PASSWORD: ${DB_PASS:-processor-password}
       POSTGRES_USER: ${DB_USER:-processor}
@@ -118,6 +124,26 @@ services:
     restart: unless-stopped
     ports:
       - '6379:6379'
+
+  autoscaler:
+    build: ./autoscaler
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/home/eric/code/video-processor:ro
+      - ${STORAGE_MOUNT:-.}:/output
+    working_dir: /home/eric/code/video-processor
+    environment:
+      REDIS_HOST: redis
+      COMPOSE_FILE: /home/eric/code/video-processor/docker-compose-local.yaml
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-video-processor}
+      COMPOSE_PROJECT_DIR: ${COMPOSE_PROJECT_DIR:-/home/eric/code/video-processor}
+      STORAGE_MOUNT: /output
+      CHECK_INTERVAL: 30
+      QUEUE_THRESHOLD: 100000
+      DISK_THRESHOLD: 90
+      EXTRACT_HIGH: 2
+      EXTRACT_LOW: 1
 
 volumes:
   postgresql:

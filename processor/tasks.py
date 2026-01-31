@@ -78,6 +78,43 @@ class DetectionResult(TypedDict):
     bbox: List[float]
 
 
+def get_video_metadata_ffprobe(filepath: str) -> Tuple[float, int]:
+    """
+    Get video metadata using ffprobe (fast, reads header only).
+
+    Returns:
+        Tuple of (frame_rate, estimated_frame_count)
+    """
+    cmd = [
+        'ffprobe',
+        '-v', 'quiet',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=avg_frame_rate,duration',
+        '-of', 'json',
+        filepath
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f'ffprobe failed: {result.stderr}')
+
+    data = json.loads(result.stdout)
+    stream = data.get('streams', [{}])[0]
+
+    # Parse frame rate (format: "30/1" or "30000/1001")
+    fps_str = stream.get('avg_frame_rate', '30/1')
+    if '/' in fps_str:
+        num, den = fps_str.split('/')
+        frame_rate = float(num) / float(den) if float(den) != 0 else 30.0
+    else:
+        frame_rate = float(fps_str)
+
+    # Estimate frame count from duration
+    duration = float(stream.get('duration', 0))
+    estimated_frame_count = int(duration * frame_rate)
+
+    return frame_rate, estimated_frame_count
+
+
 class VideoChunkCompleted(FileSystemEventHandler):
     @staticmethod
     def on_closed(event):
@@ -185,23 +222,14 @@ def chunk_video(self, video_id: int) -> None:
     
     input_filename = os.path.join(input_video_dir, video.video_file.name)
 
-    # Need to get the frame rate and frame count for the incoming video
-    # Use decord for accurate video metadata
-    from decord import VideoReader, cpu, gpu
-    import gc
-
-    ctx = gpu(0) if not settings.USE_CPU_ONLY else cpu(0)
-    vr = VideoReader(input_filename, ctx=ctx)
-    frame_rate = vr.get_avg_fps()
-    frame_count = len(vr)
-
-    # Explicitly release GPU memory to prevent CUDA memory leaks
-    del vr
-    gc.collect()
+    # Get video metadata using ffprobe (fast, header-only read)
+    # Frame count is estimated from duration * fps; will be updated with
+    # accurate count from chunks after processing
+    frame_rate, estimated_frame_count = get_video_metadata_ffprobe(input_filename)
 
     video.status = 'PROCESSING'
     video.name = video_basename
-    video.frame_count = frame_count
+    video.frame_count = estimated_frame_count
     video.frame_rate = frame_rate
     video.save()
 
@@ -239,18 +267,22 @@ def chunk_video(self, video_id: int) -> None:
         ]
     else:
         # GPU-accelerated FFmpeg command
-        # Use software decoding but GPU encoding (nvenc) for reliability
+        # Use NVDEC for hardware decoding (-hwaccel cuda) and NVENC for encoding
+        # NVDEC/NVENC are dedicated hardware units, separate from CUDA cores
+        # Keep scaling on CPU to avoid competing with detect tasks for CUDA cores
         # Force keyframes at segment boundaries to ensure clean cuts without frame overlap
         # Use -fps_mode passthrough to preserve original frame timing (avoids duplicating
         # frames in variable frame rate videos)
         ffmpeg_cmd = [
             'ffmpeg',
+            '-hwaccel', 'cuda',          # Use NVDEC for decoding
             '-i',
             f'{input_filename}',
             '-vf',
-            'scale=w=1920:h=1080',
+            'scale=w=1920:h=1080',        # CPU scaling to avoid CUDA core contention
             '-c:v',
             'h264_nvenc',
+            '-preset', 'p1',              # Fastest encoding preset
             '-fps_mode',
             'passthrough',
             '-force_key_frames',
@@ -731,8 +763,12 @@ def find_completed_videos() -> None:
     if not ready_video_ids:
         return
 
-    # Mark videos as completed
-    Video.objects.filter(id__in=ready_video_ids).update(status='COMPLETED')
+    # Mark videos as completed and update frame_count with accurate value from chunks
+    for video_id in ready_video_ids:
+        Video.objects.filter(id=video_id).update(
+            status='COMPLETED',
+            frame_count=video_targets[video_id]  # Accurate count from chunks
+        )
 
     # Trigger post-processing for each completed video
     for video_id in ready_video_ids:
