@@ -78,6 +78,18 @@ class DetectionResult(TypedDict):
     bbox: List[float]
 
 
+# Heartbeat file for health checks - touched periodically to indicate worker is alive
+HEARTBEAT_FILE = Path('/tmp/celery_heartbeat')
+
+
+def touch_heartbeat():
+    """Touch the heartbeat file to indicate the worker is making progress."""
+    try:
+        HEARTBEAT_FILE.touch()
+    except Exception:
+        pass  # Don't let heartbeat failures break task execution
+
+
 def get_video_metadata_ffprobe(filepath: str) -> Tuple[float, int]:
     """
     Get video metadata using ffprobe (fast, reads header only).
@@ -299,8 +311,23 @@ def chunk_video(self, video_id: int) -> None:
             f'{output_dir}/{video_basename}%03d.mp4'
         ]
     
-    subprocess.run(ffmpeg_cmd, check=True)
-    
+    # Run ffmpeg with output monitoring for heartbeat
+    # ffmpeg writes progress to stderr, so we monitor that to detect hangs
+    process = subprocess.Popen(
+        ffmpeg_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    # Read stderr line by line, touching heartbeat on each line
+    for line in process.stderr:
+        touch_heartbeat()
+
+    return_code = process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, ffmpeg_cmd)
+
     if settings.USE_SYNCHRONOUS_PROCESSING:
         # Process chunks synchronously - find all created chunk files
         chunk_files = sorted(glob.glob(f'{output_dir}/{video_basename}*.mp4'))
@@ -466,6 +493,7 @@ def extract_frames(self, video_chunk_id: int) -> None:
             else:
                 detect.delay(frame.id)
             frame_number += 1
+            touch_heartbeat()
 
         if skipped_frames > 0:
             logger.info(f'Chunk {video_chunk_id}: skipped {skipped_frames} undecodable frames')
@@ -533,13 +561,14 @@ def check_gpu_memory_after_task(task_id, task, **kwargs):
 def detect(frame_id: int) -> None:
     """
     Run AI detection on a single frame to find animals, people, or vehicles.
-    
+
     Uses MegaDetector v5a model to analyze the frame and store detection results.
-    
+
     Args:
         frame_id: The ID of the Frame model instance to analyze
     """
-    
+    touch_heartbeat()
+
     frame = Frame.objects.get(id=frame_id)
 
     if frame.status == 'PROCESSING':

@@ -26,7 +26,16 @@ services:
         required: false
     environment:
       STORAGE_MOUNT: /output
+      HEALTHCHECK_MAX_AGE: 10
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'chunk@%h', '-l', 'INFO', '-Q', 'chunk_video', '--concurrency', '1']
+    healthcheck:
+      test: ['CMD', 'bash', '/code/healthcheck.sh']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "autoheal=true"
     deploy:
       replicas: 1
       resources:
@@ -47,7 +56,16 @@ services:
         required: false
     environment:
       STORAGE_MOUNT: /output
+      HEALTHCHECK_MAX_AGE: 5
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'extract@%h', '-l', 'INFO', '-Q', 'extract', '--concurrency', '1', '--pool', 'solo']
+    healthcheck:
+      test: ['CMD', 'bash', '/code/healthcheck.sh']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "autoheal=true"
     deploy:
       replicas: ${EXTRACT_WORKERS_PER_HOST:-1}
       resources:
@@ -68,7 +86,16 @@ services:
         required: false
     environment:
       STORAGE_MOUNT: /output
+      HEALTHCHECK_MAX_AGE: 2
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'detect@%h', '-l', 'ERROR', '-Q', 'detect', '--concurrency', '1', '--pool', 'solo']
+    healthcheck:
+      test: ['CMD', 'bash', '/code/healthcheck.sh']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "autoheal=true"
     deploy:
       replicas: ${DETECT_WORKERS_PER_HOST:-1}
       resources:
@@ -89,7 +116,16 @@ services:
         required: false
     environment:
       STORAGE_MOUNT: /output
+      HEALTHCHECK_MAX_AGE: 10
     command: ['celery', '-A', 'video_processor', 'worker', '-n', 'output@%h', '-B', '-l', 'INFO', '-Q', 'create_output', '--concurrency', '1']
+    healthcheck:
+      test: ['CMD', 'bash', '/code/healthcheck.sh']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "autoheal=true"
     deploy:
       replicas: 1
       resources:
@@ -144,6 +180,17 @@ services:
       DISK_THRESHOLD: 90
       EXTRACT_HIGH: 2
       EXTRACT_LOW: 1
+
+  autoheal:
+    image: willfarrell/autoheal
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 60
+      AUTOHEAL_START_PERIOD: 120
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
 
 volumes:
   postgresql:
